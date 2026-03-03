@@ -14,63 +14,15 @@ The architecture pairs each processing stage with the attention mechanism best s
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph S0["Stage 0 · 4 streams · dim=64 · Linear Attention"]
-        direction LR
-        A["Stream A<br/>4 layers"]
-        B["Stream B<br/>4 layers"]
-        C["Stream C<br/>4 layers"]
-        D["Stream D<br/>4 layers"]
-    end
+The model processes input through *K* stages with decreasing stream counts (4 &rarr; 2 &rarr; 1), where each stage pairs independent transformer streams with the attention mechanism suited to its role:
 
-    subgraph M1["Gated Merge · σ-gate + projection · 64 → 128"]
-        direction LR
-        G1["Merge(A, B)"]
-        G2["Merge(C, D)"]
-    end
+- **Stage 0** (4 streams, dim=64) &mdash; Linear attention for cheap, broad exploration
+- **Stage 1** (2 streams, dim=128) &mdash; Sliding-window attention for local refinement
+- **Stage 2** (1 stream, dim=128) &mdash; Full causal attention for high-fidelity output
 
-    subgraph S1["Stage 1 · 2 streams · dim=128 · Sliding-Window Attention"]
-        direction LR
-        AB["Stream AB<br/>4 layers"]
-        CD["Stream CD<br/>4 layers"]
-    end
+Between stages, **gated merge** operations (learned sigmoid gates + linear projections) selectively combine stream pairs. Additional components include **depth-extended RoPE** encoding both token position and network depth, **deep supervision** loss at merge boundaries, and **cross-stream agreement** as a natural confidence signal for early exit.
 
-    subgraph M2["Gated Merge · σ-gate + projection"]
-        G3["Merge(AB, CD)"]
-    end
-
-    subgraph S2["Stage 2 · 1 stream · dim=128 · Full Causal Attention"]
-        ABCD["Stream ABCD<br/>5 layers"]
-    end
-
-    OUT(["LM Head → logits"])
-
-    A --> G1
-    B --> G1
-    C --> G2
-    D --> G2
-    G1 --> AB
-    G2 --> CD
-    AB --> G3
-    CD --> G3
-    G3 --> ABCD
-    ABCD --> OUT
-
-    style S0 stroke:#4a6fa5,stroke-width:2px
-    style S1 stroke:#4a9f6a,stroke-width:2px
-    style S2 stroke:#c4873a,stroke-width:2px
-    style M1 stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
-    style M2 stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
-```
-
-**Key components:**
-
-- **Heterogeneous attention** &mdash; Linear (Stage 0) &rarr; Sliding window (Stage 1) &rarr; Full causal (Stage 2), matching compute cost to processing stage
-- **Gated merge** &mdash; Learned sigmoid gates with linear projections combine stream pairs between stages; gates train from ~1.0 (fully open) toward ~0.65 (selective)
-- **Depth-extended RoPE** &mdash; Positional encoding augmented with network-depth information, encoding both *where* a token is and *how deep* it has been processed
-- **Deep supervision** &mdash; Auxiliary language modeling loss at every merge boundary, encouraging useful intermediate representations
-- **Cross-stream agreement** &mdash; Pairwise agreement between streams provides a natural confidence signal for potential early exit
+See the [design document](docs/felix_lm_design.pdf) for the full mathematical framework.
 
 ## Results
 
