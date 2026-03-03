@@ -14,39 +14,55 @@ The architecture pairs each processing stage with the attention mechanism best s
 
 ## Architecture
 
-```text
-                        ┌─────────────────────────────────────────┐
-  Stage 0               │   Stream A    Stream B    Stream C    Stream D  │
-  4 streams, dim=64     │   ┌──────┐    ┌──────┐    ┌──────┐    ┌──────┐ │
-  Linear attention      │   │ 4 Lyr│    │ 4 Lyr│    │ 4 Lyr│    │ 4 Lyr│ │
-  (4 layers each)       │   └──┬───┘    └──┬───┘    └──┬───┘    └──┬───┘ │
-                        └─────┬──────────┬──────────┬──────────┬──────┘
-                              │          │          │          │
-                        ┌─────▼──────────▼──────────▼──────────▼──────┐
-  Merge 0→1             │   Gated Merge (A,B)      Gated Merge (C,D)  │
-  σ-gated projection    │   concat → gate → proj   concat → gate → proj│
-                        └─────┬─────────────────────────────┬─────────┘
-                              │                             │
-                        ┌─────▼─────────────────────────────▼─────────┐
-  Stage 1               │       Stream AB              Stream CD      │
-  2 streams, dim=128    │       ┌──────┐               ┌──────┐      │
-  Sliding-window attn   │       │ 4 Lyr│               │ 4 Lyr│      │
-  (4 layers each)       │       └──┬───┘               └──┬───┘      │
-                        └─────────┬─────────────────────┬─────────────┘
-                                  │                     │
-                        ┌─────────▼─────────────────────▼─────────────┐
-  Merge 1→2             │         Gated Merge (AB, CD)                │
-                        └─────────────────────┬───────────────────────┘
-                                              │
-                        ┌─────────────────────▼───────────────────────┐
-  Stage 2               │               Stream ABCD                   │
-  1 stream, dim=128     │               ┌──────┐                      │
-  Full causal attn      │               │ 5 Lyr│                      │
-  (5 layers)            │               └──┬───┘                      │
-                        └─────────────────┬───────────────────────────┘
-                                          │
-                                          ▼
-                                     LM Head → logits
+```mermaid
+graph TD
+    subgraph S0["Stage 0 · 4 streams · dim=64 · Linear Attention"]
+        direction LR
+        A["Stream A<br/>4 layers"]
+        B["Stream B<br/>4 layers"]
+        C["Stream C<br/>4 layers"]
+        D["Stream D<br/>4 layers"]
+    end
+
+    subgraph M1["Gated Merge · σ-gate + projection · 64 → 128"]
+        direction LR
+        G1["Merge(A, B)"]
+        G2["Merge(C, D)"]
+    end
+
+    subgraph S1["Stage 1 · 2 streams · dim=128 · Sliding-Window Attention"]
+        direction LR
+        AB["Stream AB<br/>4 layers"]
+        CD["Stream CD<br/>4 layers"]
+    end
+
+    subgraph M2["Gated Merge · σ-gate + projection"]
+        G3["Merge(AB, CD)"]
+    end
+
+    subgraph S2["Stage 2 · 1 stream · dim=128 · Full Causal Attention"]
+        ABCD["Stream ABCD<br/>5 layers"]
+    end
+
+    OUT(["LM Head → logits"])
+
+    A --> G1
+    B --> G1
+    C --> G2
+    D --> G2
+    G1 --> AB
+    G2 --> CD
+    AB --> G3
+    CD --> G3
+    G3 --> ABCD
+    ABCD --> OUT
+
+    style S0 fill:#f0f4ff,stroke:#4a6fa5,stroke-width:2px
+    style S1 fill:#f0fff4,stroke:#4a9f6a,stroke-width:2px
+    style S2 fill:#fff8f0,stroke:#c4873a,stroke-width:2px
+    style M1 fill:#fafafa,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
+    style M2 fill:#fafafa,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
+    style OUT fill:#f5f5f5,stroke:#333,stroke-width:2px
 ```
 
 **Key components:**
