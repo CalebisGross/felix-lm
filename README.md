@@ -57,12 +57,11 @@ graph TD
     G3 --> ABCD
     ABCD --> OUT
 
-    style S0 fill:#f0f4ff,stroke:#4a6fa5,stroke-width:2px
-    style S1 fill:#f0fff4,stroke:#4a9f6a,stroke-width:2px
-    style S2 fill:#fff8f0,stroke:#c4873a,stroke-width:2px
-    style M1 fill:#fafafa,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
-    style M2 fill:#fafafa,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
-    style OUT fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style S0 stroke:#4a6fa5,stroke-width:2px
+    style S1 stroke:#4a9f6a,stroke-width:2px
+    style S2 stroke:#c4873a,stroke-width:2px
+    style M1 stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
+    style M2 stroke:#999,stroke-width:1px,stroke-dasharray: 5 5
 ```
 
 **Key components:**
