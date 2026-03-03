@@ -40,7 +40,11 @@ def main():
     print(f"Trained for {ckpt.get('step', '?')} steps")
 
     # Load data
-    from scripts.train import WikiTextDataset
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from train import WikiTextDataset
 
     ds = WikiTextDataset(args.split, seq_len=args.seq_len, cache_dir=args.data_dir)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
@@ -73,7 +77,7 @@ def main():
     print(f"  Perplexity:   {ppl:.2f}")
 
     if per_stage_totals:
-        print(f"  Per-stage losses:")
+        print("  Per-stage losses:")
         for k, total in enumerate(per_stage_totals):
             stage_loss = total / total_tokens
             print(f"    Stage {k}: {stage_loss:.4f} (ppl {math.exp(min(stage_loss, 20)):.2f})")

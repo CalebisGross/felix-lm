@@ -32,6 +32,24 @@ checkpoints/
 wandb/
 runs/
 
+# Claude Code
+.claude/
+
+# Testing
+.pytest_cache/
+
+# Notebooks
+notebooks/
+
+# LaTeX aux files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+
 # Misc
 *.log
 .env

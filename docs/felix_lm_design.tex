@@ -1,0 +1,1137 @@
+\documentclass[11pt,a4paper]{article}
+
+% ─── Packages ────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{tikz-cd}
+\usetikzlibrary{positioning,arrows.meta,decorations.pathreplacing,calc,shapes.geometric}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{thmtools}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+\geometry{margin=1in}
+
+% ─── Theorem environments ────────────────────────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{example}[definition]{Example}
+
+\theoremstyle{plain}
+\newtheorem{theorem}[definition]{Theorem}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{corollary}[definition]{Corollary}
+
+\theoremstyle{remark}
+\newtheorem{remark}[definition]{Remark}
+
+% ─── Custom commands ─────────────────────────────────────────────────────
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Hcal}{\mathcal{H}}
+\newcommand{\Scal}{\mathcal{S}}
+\newcommand{\Lcal}{\mathcal{L}}
+\newcommand{\Mcal}{\mathcal{M}}
+\newcommand{\Tcal}{\mathcal{T}}
+\newcommand{\Ocal}{\mathcal{O}}
+\newcommand{\Vcal}{\mathcal{V}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\sigmoid}{\sigma}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\rank}{\operatorname{rank}}
+\newcommand{\Rot}{\operatorname{Rot}}
+\newcommand{\Ent}{\operatorname{H}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% ─── Header/footer ──────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textsc{Felix-LM}}
+\fancyhead[R]{\textsc{Design Document v0.1}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ─── Title ───────────────────────────────────────────────────────────────
+\title{%
+  \textbf{Felix-LM: Multi-Stream Progressive Merging\\
+  for Causal Language Modeling}\\[0.5em]
+  \large Architecture Design Document \& Theoretical Foundation
+}
+\author{%
+  Caleb Gross\\
+  {\small\textit{[Affiliation]}}\\
+  {\small\texttt{caleb@appsprout.dev}}
+}
+\date{Draft --- \today}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+% ═════════════════════════════════════════════════════════════════════════
+\begin{abstract}
+We propose \textbf{Felix-LM}, a novel causal language model architecture 
+derived from the computational principles of the Felix multi-agent 
+framework. Where standard transformer architectures process representations 
+through a uniform stack of identical layers, Felix-LM introduces 
+\emph{Multi-Stream Progressive Merging} (MSPM): the input is processed by 
+multiple independent computational streams that progressively merge into a 
+single output stream through a sequence of structured convergence operations.
+
+We formalize the claim that this architecture induces a \emph{helical funnel 
+trajectory} in representation space---a path characterized by simultaneous 
+rotational mixing and radial compression as representations move through the 
+network's depth. We provide the mathematical framework for this trajectory, 
+specify the architecture precisely, analyze its gradient flow and 
+information-theoretic properties, and propose an ablation study to test 
+whether the multi-stream progressive merging inductive bias improves 
+perplexity on standard language modeling benchmarks relative to 
+parameter-matched uniform transformers.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Introduction}\label{sec:intro}
+
+\subsection{Motivation}
+
+The dominant architecture for autoregressive language modeling is the 
+decoder-only transformer \cite{vaswani2017attention, radford2019language}, 
+consisting of $L$ structurally identical layers, each comprising multi-head 
+self-attention and a position-wise feedforward network. Every layer operates 
+on a representation of fixed dimension $d_{\text{model}}$, and the output of 
+each layer is added to the input via a residual connection. We refer to this 
+as the \emph{uniform} architecture.
+
+Empirical evidence suggests that this uniformity is suboptimal: early layers 
+in trained transformers predominantly capture local syntactic features, while 
+later layers encode global semantic and reasoning structure 
+\cite{tenney2019bert, clark2019what}. The uniform architecture allocates 
+identical computational resources to both regimes, suggesting that a 
+\emph{heterogeneous} architecture---one whose structure varies with 
+depth---might achieve better performance per parameter.
+
+\subsection{The Felix Framework}
+
+The Felix multi-agent framework\footnote{Developed by C.\ [Surname]; 
+codebase and documentation available at [repository].} provides the 
+conceptual foundation for this work. Felix models a team of AI agents 
+traversing a helical path in 3D space, governed by the parametric equations:
+\begin{align}
+  x(t) &= R(t)\cos\bigl(2\pi n t\bigr), \label{eq:felix-x}\\
+  y(t) &= R(t)\sin\bigl(2\pi n t\bigr), \label{eq:felix-y}\\
+  z(t) &= H(1 - t), \label{eq:felix-z}
+\end{align}
+where $t \in [0,1]$ is the progression parameter, $n$ is the number of 
+helical turns, $H$ is the total height, and the radius follows an 
+exponential tapering function:
+\begin{equation}\label{eq:felix-radius}
+  R(t) = R_{\min} \left(\frac{R_{\max}}{R_{\min}}\right)^{1-t}.
+\end{equation}
+
+In Felix, agents at the top of the helix ($t \approx 0$) perform broad, 
+divergent exploration; agents at the bottom ($t \approx 1$) perform focused, 
+convergent synthesis. A central hub (the \emph{CentralPost}) sits on the 
+helix's axis and performs final integration of all agent outputs. The key 
+computational principles are:
+\begin{enumerate}[label=(\roman*)]
+  \item \textbf{Parallel exploration, progressive convergence}: Multiple 
+    independent processing paths narrow to a single output.
+  \item \textbf{Depth-dependent computation type}: Early processing is 
+    broad and divergent; late processing is focused and convergent.
+  \item \textbf{Confidence-gated resource allocation}: Computation is 
+    allocated adaptively based on a confidence signal.
+  \item \textbf{Structured communication at convergence points}: 
+    Cross-stream information exchange occurs at specific merge events, not 
+    globally at every step.
+\end{enumerate}
+
+\subsection{Thesis Statement}
+
+We propose that these four principles can be instantiated as an inductive 
+bias in the architecture of a causal language model, yielding a model 
+that traces a \emph{helical funnel} in representation space: a trajectory 
+characterized by monotonic reduction in the number of independent 
+processing streams (the ``funnel'') combined with learned rotational mixing 
+at stream-merge boundaries (the ``helix''). We hypothesize that this 
+inductive bias improves language modeling perplexity relative to a 
+parameter-matched uniform transformer, particularly on sequences requiring 
+multi-step reasoning.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Mathematical Preliminaries}\label{sec:prelim}
+
+\subsection{Notation}
+
+Let $\Vcal$ denote a vocabulary of size $V$. An input sequence is 
+$\mathbf{x} = (x_1, \ldots, x_T)$ with $x_i \in \Vcal$. A causal 
+language model defines $p(x_{t+1} \mid x_1, \ldots, x_t)$ for all $t$.
+
+We write $\R^{d}$ for $d$-dimensional Euclidean space. For a matrix 
+$W \in \R^{m \times n}$, we write $W^\top$ for its transpose and 
+$\|W\|_F$ for its Frobenius norm. The identity matrix is $I_d \in 
+\R^{d \times d}$. We write $\sigmoid(\cdot)$ for the logistic sigmoid 
+function and $\softmax(\cdot)$ for the softmax function.
+
+\subsection{Representation Space and Trajectories}\label{sec:rep-traj}
+
+\begin{definition}[Representation trajectory]\label{def:rep-traj}
+Let $f: \R^{d_{\text{in}}} \to \R^{d_{\text{out}}}$ be a neural network 
+of depth $L$ with intermediate representations $\mathbf{h}^{(0)}, 
+\mathbf{h}^{(1)}, \ldots, \mathbf{h}^{(L)}$. The \emph{representation 
+trajectory} of an input $\mathbf{x}$ is the sequence
+\[
+  \gamma(\mathbf{x}) = \bigl(\mathbf{h}^{(0)}, \mathbf{h}^{(1)}, \ldots, 
+  \mathbf{h}^{(L)}\bigr),
+\]
+where $\mathbf{h}^{(\ell)} \in \R^{d_\ell}$ is the representation at 
+depth $\ell$. When $d_\ell$ varies with $\ell$, we embed all 
+representations into a common ambient space $\R^{d_{\max}}$ via 
+zero-padding for the purpose of geometric analysis.
+\end{definition}
+
+\begin{definition}[Effective dimensionality]\label{def:eff-dim}
+For a representation $\mathbf{h} \in \R^d$, the \emph{effective 
+dimensionality} with respect to a gate vector $\mathbf{g} \in [0,1]^d$ is
+\[
+  d_{\text{eff}}(\mathbf{h}, \mathbf{g}) = \|\mathbf{g}\|_1 = 
+  \sum_{i=1}^{d} g_i.
+\]
+This generalizes hard dimensionality reduction: when $g_i \in \{0,1\}$, 
+$d_{\text{eff}}$ counts the number of active dimensions. For soft gates 
+$g_i \in (0,1)$, it provides a smooth interpolation.
+\end{definition}
+
+\begin{definition}[Helical trajectory in representation space]
+\label{def:helical-traj}
+A representation trajectory $\gamma$ is \emph{helical} if there exists a 
+sequence of orthogonal transformations $\{Q^{(\ell)} \in O(d_{\max})\}$ 
+and a monotonically decreasing effective dimensionality sequence 
+$\{d_{\text{eff}}^{(\ell)}\}$ such that the transition between successive 
+representations can be decomposed as:
+\begin{equation}\label{eq:helical-decomp}
+  \mathbf{h}^{(\ell+1)} = Q^{(\ell)} \cdot 
+  \bigl(\mathbf{g}^{(\ell)} \odot f^{(\ell)}(\mathbf{h}^{(\ell)})\bigr),
+\end{equation}
+where $f^{(\ell)}$ is the layer computation, $\mathbf{g}^{(\ell)}$ is a 
+gating vector with $\|\mathbf{g}^{(\ell)}\|_1 \leq 
+\|\mathbf{g}^{(\ell-1)}\|_1$, $\odot$ denotes elementwise multiplication, 
+and $Q^{(\ell)}$ is an orthogonal rotation.
+
+The \emph{angular velocity} of the trajectory is 
+$\omega^{(\ell)} = \arccos\bigl(\frac{\tr(Q^{(\ell)})}{d_{\max}}\bigr)$, 
+and the \emph{radial compression rate} is 
+$\rho^{(\ell)} = d_{\text{eff}}^{(\ell+1)} / d_{\text{eff}}^{(\ell)} 
+\leq 1$.
+\end{definition}
+
+\begin{remark}
+In a standard uniform transformer with residual connections, the trajectory 
+is approximately \emph{linear} (representations are incrementally shifted 
+in a consistent direction) with constant effective dimensionality. The 
+helical trajectory introduces both rotation and compression, forcing the 
+network to progressively refine and consolidate its representation. This is 
+the mathematical content of the Felix helical metaphor.
+\end{remark}
+
+\subsection{Rotary Position Embeddings (RoPE)}\label{sec:rope}
+
+Rotary Position Embeddings \cite{su2021roformer} encode token position $m$ 
+by applying a block-diagonal rotation matrix $\Rot(m) \in \R^{d \times d}$ 
+to query and key vectors before computing attention. For dimension pair 
+$(2i, 2i+1)$ with frequency $\theta_i = 10000^{-2i/d}$:
+\begin{equation}\label{eq:rope}
+  \Rot(m)_{2i:2i+1} = 
+  \begin{pmatrix} 
+    \cos(m\theta_i) & -\sin(m\theta_i) \\ 
+    \sin(m\theta_i) & \phantom{-}\cos(m\theta_i) 
+  \end{pmatrix}.
+\end{equation}
+The key property is that the inner product between rotated queries and keys 
+depends only on relative position: 
+$\langle \Rot(m)\mathbf{q}, \Rot(n)\mathbf{k}\rangle = 
+\langle \Rot(m-n)\mathbf{q}, \mathbf{k}\rangle$.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Architecture}\label{sec:arch}
+
+Felix-LM is organized into $K$ \emph{stages}, indexed $k = 0, 1, \ldots, 
+K-1$. Stage $k$ contains $S_k$ independent processing \emph{streams}, each 
+of model dimension $d_k$. The number of streams decreases monotonically: 
+$S_0 > S_1 > \cdots > S_{K-1} = 1$. Between consecutive stages, a 
+\emph{merge operation} reduces the stream count by combining pairs of 
+streams. Each stream within a stage consists of $L_k$ transformer layers 
+(self-attention + FFN), with architecture details that may vary by stage.
+
+The overall computation proceeds:
+\begin{equation}\label{eq:overall}
+  \underbrace{\text{Embed}}_{\text{input}} 
+  \;\to\; 
+  \underbrace{S_0 \text{ streams} \times L_0 \text{ layers}}_{\text{Stage 0}}
+  \;\xrightarrow{\text{Merge}}\;
+  \underbrace{S_1 \text{ streams} \times L_1 \text{ layers}}_{\text{Stage 1}}
+  \;\xrightarrow{\text{Merge}}\;
+  \cdots
+  \;\xrightarrow{\text{Merge}}\;
+  \underbrace{1 \text{ stream} \times L_{K-1} \text{ layers}}_{\text{Stage } K{-}1}
+  \;\to\;
+  \underbrace{\text{Head}}_{\text{output}}.
+\end{equation}
+
+\subsection{Input Embedding and Stream Initialization}\label{sec:embed}
+
+Given an input sequence $\mathbf{x} = (x_1, \ldots, x_T)$, we compute a 
+shared token embedding:
+\begin{equation}
+  \mathbf{e}_t = \text{Embed}(x_t) \in \R^{d_{\text{embed}}},
+  \quad t = 1, \ldots, T.
+\end{equation}
+
+Each stream $s \in \{1, \ldots, S_0\}$ in Stage~0 receives the input 
+through a learned \emph{stream projection}:
+\begin{equation}\label{eq:stream-init}
+  \mathbf{h}_{t,s}^{(0,0)} = W_s^{\text{init}} \mathbf{e}_t + 
+  \mathbf{b}_s^{\text{init}}, 
+  \quad W_s^{\text{init}} \in \R^{d_0 \times d_{\text{embed}}},
+\end{equation}
+where each projection $W_s^{\text{init}}$ is initialized to encourage 
+diverse initial representations across streams (see \S\ref{sec:init}).
+
+\begin{remark}
+Each stream can be understood as attending to a different ``aspect'' of 
+the input, analogous to how Felix spawns agents of different types 
+(Research, Analysis, Critic) that examine the same task from different 
+perspectives. The stream projections play the role of role specialization.
+\end{remark}
+
+\subsection{Intra-Stream Computation}\label{sec:intra-stream}
+
+Within stage $k$, each stream $s$ independently processes its 
+representation through $L_k$ transformer layers. We denote the 
+representation at layer $\ell$ within stage $k$, stream $s$, token 
+position $t$ as $\mathbf{h}_{t,s}^{(k,\ell)} \in \R^{d_k}$.
+
+Each layer consists of:
+\begin{align}
+  \tilde{\mathbf{h}} &= \mathbf{h}_{t,s}^{(k,\ell)} + 
+    \text{Attn}_{k,\ell,s}\bigl(
+      \text{LN}(\mathbf{h}_{:,s}^{(k,\ell)})\bigr)_t, 
+    \label{eq:attn-residual} \\
+  \mathbf{h}_{t,s}^{(k,\ell+1)} &= \tilde{\mathbf{h}} + 
+    \text{FFN}_{k,\ell,s}\bigl(\text{LN}(\tilde{\mathbf{h}})\bigr),
+    \label{eq:ffn-residual}
+\end{align}
+where $\text{LN}$ denotes RMSNorm \cite{zhang2019root}, and the 
+attention and FFN modules are specific to stage $k$, layer $\ell$, and 
+stream $s$. The notation $\mathbf{h}_{:,s}^{(k,\ell)}$ denotes the full 
+sequence of representations for stream $s$ (used as keys/values in 
+attention).
+
+\paragraph{Heterogeneous attention by stage.}
+A key design principle is that the \emph{type} of attention varies with 
+stage, reflecting Felix's principle of depth-dependent computation:
+
+\begin{center}
+\begin{tabular}{@{}clll@{}}
+\toprule
+\textbf{Stage} & \textbf{Felix Analog} & \textbf{Attention Type} & 
+  \textbf{Rationale} \\
+\midrule
+$k = 0$ & Research (exploration) & Linear / SSM & 
+  $\Ocal(T)$: broad, cheap context \\
+$k = 1, \ldots, K{-}2$ & Analysis (convergence) & Sliding window & 
+  $\Ocal(Tw)$: local precision \\
+$k = K{-}1$ & CentralPost (synthesis) & Full causal & 
+  $\Ocal(T^2)$: maximum precision \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This allocation concentrates quadratic-cost attention at the final stage, 
+where only a single stream operates, and uses efficient linear-time 
+mechanisms in the early stages where multiple parallel streams would 
+otherwise multiply the cost.
+
+\paragraph{Weight sharing.}
+Streams within the same stage may share weights (all streams identical, 
+differentiated only by their initial projection) or have independent 
+weights (each stream is a distinct sub-network). We denote these 
+configurations as \textsc{Shared} and \textsc{Independent}, respectively, 
+and treat this as an ablation variable.
+
+\subsection{Merge Operation}\label{sec:merge}
+
+The merge operation is the architectural core of Felix-LM, implementing 
+the progressive convergence that defines the helical funnel.
+
+\begin{definition}[Stream merge]\label{def:merge}
+Let streams $s$ and $s'$ at the end of stage $k$ have representations 
+$\mathbf{h}_{t,s}^{(k, L_k)}, \mathbf{h}_{t,s'}^{(k, L_k)} \in 
+\R^{d_k}$ for each token $t$. The \emph{merge operation} produces a single 
+stream representation $\mathbf{m}_t \in \R^{d_{k+1}}$ for the next stage:
+\begin{equation}\label{eq:merge}
+  \mathbf{m}_t = \underbrace{P_{k}}_{\text{projection}} 
+  \Bigl( 
+    \underbrace{\mathbf{g}_{k}([\mathbf{h}_{t,s}; \mathbf{h}_{t,s'}])}_%
+      {\text{gated combination}} 
+  \Bigr),
+\end{equation}
+where $[\cdot\,;\,\cdot]$ denotes concatenation along the feature axis, 
+$P_k \in \R^{d_{k+1} \times 2d_k}$ is a learned projection, and 
+$\mathbf{g}_k: \R^{2d_k} \to [0,1]^{2d_k}$ is a gating function:
+\begin{equation}\label{eq:gate}
+  \mathbf{g}_k(\mathbf{z}) = \sigmoid\bigl(W_k^g \mathbf{z} + 
+  \mathbf{b}_k^g\bigr), 
+  \quad W_k^g \in \R^{2d_k \times 2d_k}.
+\end{equation}
+The full merge operation is thus:
+\begin{equation}\label{eq:merge-full}
+  \mathbf{m}_t = P_k \Bigl( \sigmoid\bigl(W_k^g 
+  [\mathbf{h}_{t,s}; \mathbf{h}_{t,s'}] + \mathbf{b}_k^g\bigr) \odot 
+  [\mathbf{h}_{t,s}; \mathbf{h}_{t,s'}] \Bigr).
+\end{equation}
+\end{definition}
+
+\begin{remark}[Connection to Felix's CentralPost]
+In Felix, the CentralPost synthesizes agent outputs with adaptive 
+parameters (temperature $\in [0.2, 0.4]$, token budget $\in 
+[1500, 3000]$). The merge gate $\mathbf{g}_k$ plays an analogous role: it 
+learns which features from each stream to preserve (high gate value) versus 
+suppress (low gate value) during synthesis. The projection $P_k$ 
+corresponds to the CentralPost's final synthesis prompt.
+\end{remark}
+
+\subsubsection{Cross-Stream Attention at Merge Points}
+\label{sec:cross-attn}
+
+Before applying the gated projection, we optionally perform a single layer 
+of \emph{cross-stream attention}, where each stream attends to the other:
+\begin{align}
+  \hat{\mathbf{h}}_{t,s} &= \mathbf{h}_{t,s}^{(k,L_k)} + 
+    \text{CrossAttn}\bigl(\mathbf{h}_{t,s}^{(k,L_k)},\; 
+    \mathbf{h}_{:,s'}^{(k,L_k)}\bigr), \label{eq:cross-attn}
+\end{align}
+where $\text{CrossAttn}(Q\text{-source}, KV\text{-source})$ is standard 
+multi-head attention with queries from one stream and keys/values from the 
+other. This allows streams to exchange information before fusion, 
+implementing Felix's principle of structured communication at convergence 
+points. We treat the inclusion of cross-stream attention as an ablation 
+variable.
+
+\subsubsection{The Merge Projection as Rotation}
+\label{sec:merge-rotation}
+
+We can decompose the merge projection $P_k$ via polar decomposition:
+\begin{equation}\label{eq:polar}
+  P_k = U_k \Sigma_k V_k^\top, 
+\end{equation}
+where $U_k \in \R^{d_{k+1} \times d_{k+1}}$ and $V_k \in \R^{2d_k 
+\times 2d_k}$ are orthogonal, and $\Sigma_k$ is the singular value matrix. 
+The matrix $V_k^\top$ rotates the concatenated representation in 
+$\R^{2d_k}$, $\Sigma_k$ scales (compresses) dimensions, and $U_k$ rotates 
+the result in $\R^{d_{k+1}}$.
+
+This decomposition reveals that every merge naturally performs 
+\emph{rotation followed by compression followed by rotation}---the 
+mathematical structure of a helical step. We may optionally constrain 
+$P_k$ to have orthogonal rows ($P_k P_k^\top = I_{d_{k+1}}$) to 
+guarantee \emph{isometric} compression: the merge preserves inner products 
+and thus similarity structure, ensuring that information is consolidated 
+without distortion. This constraint can be enforced via Cayley 
+parameterization:
+\begin{equation}\label{eq:cayley}
+  P_k = (I - A_k)(I + A_k)^{-1} \cdot \Pi,
+\end{equation}
+where $A_k$ is a learnable skew-symmetric matrix and $\Pi \in 
+\R^{d_{k+1} \times 2d_k}$ is a fixed truncation matrix. We treat this 
+orthogonality constraint as an ablation variable.
+
+\subsection{Depth-Extended Rotary Embeddings}\label{sec:depth-rope}
+
+Standard RoPE (\S\ref{sec:rope}) encodes token position via rotation. 
+We extend this to also encode \emph{depth} (layer index), providing the 
+``twist'' of the helical trajectory.
+
+\begin{definition}[Depth-extended RoPE]\label{def:depth-rope}
+At global layer index $\ell_{\text{global}}$ (counting across all stages) 
+and token position $m$, the rotation applied to dimension pair 
+$(2i, 2i+1)$ of queries and keys is:
+\begin{equation}\label{eq:depth-rope}
+  \Rot(m, \ell_{\text{global}})_{2i:2i+1} = 
+  \begin{pmatrix} 
+    \cos\phi_i & -\sin\phi_i \\ 
+    \sin\phi_i & \phantom{-}\cos\phi_i 
+  \end{pmatrix},
+\end{equation}
+where the composite angle is:
+\begin{equation}\label{eq:composite-angle}
+  \phi_i(m, \ell_{\text{global}}) = m \cdot \theta_i^{\text{pos}} + 
+  \ell_{\text{global}} \cdot \theta_i^{\text{depth}},
+\end{equation}
+with position frequencies $\theta_i^{\text{pos}} = 
+\beta_{\text{pos}}^{-2i/d}$ and depth frequencies 
+$\theta_i^{\text{depth}} = \alpha_i \cdot 
+\frac{2\pi n}{L_{\text{total}}}$.
+\end{definition}
+
+Here $n$ is the number of helical turns (directly from the Felix 
+configuration), $L_{\text{total}} = \sum_k L_k$ is the total layer count, 
+$\beta_{\text{pos}}$ is the RoPE base frequency (typically $10000$), and 
+$\alpha_i$ is a per-dimension scaling factor that controls the coupling 
+strength between depth and position. Setting $\alpha_i = 0$ recovers 
+standard RoPE; setting $\alpha_i = 1$ applies the full helical twist.
+
+\begin{proposition}[Relative depth encoding]\label{prop:rel-depth}
+Under depth-extended RoPE, the attention score between query at position 
+$m$, depth $\ell$ and key at position $m'$, depth $\ell'$ in dimension 
+pair $i$ depends only on the relative position $\Delta m = m - m'$ and 
+relative depth $\Delta\ell = \ell - \ell'$:
+\begin{equation}
+  \langle \Rot(m, \ell)\mathbf{q}_i, \Rot(m', \ell')\mathbf{k}_i\rangle 
+  = \langle \Rot(\Delta m, \Delta\ell)\mathbf{q}_i, 
+  \mathbf{k}_i\rangle.
+\end{equation}
+\end{proposition}
+\begin{proof}
+This follows from the group homomorphism property of rotation matrices: 
+$\Rot(\phi_1)\Rot(\phi_2) = \Rot(\phi_1 + \phi_2)$, since $\phi_i$ is 
+linear in both $m$ and $\ell_{\text{global}}$.
+\end{proof}
+
+\begin{remark}
+In causal (decoder-only) language modeling, cross-depth attention does not 
+occur---each layer only attends within itself. The depth-extended RoPE 
+nonetheless affects the geometry: it ensures that representations at 
+successive depths exist in \emph{rotated} coordinate frames, which 
+influences how the residual stream accumulates information and how the 
+merge projections interact with different depths' representations. The 
+relative-depth property becomes directly relevant if skip connections 
+across stages are introduced (\S\ref{sec:extensions}).
+\end{remark}
+
+\subsection{Confidence-Gated Early Exit}\label{sec:early-exit}
+
+Felix agents with high confidence accelerate through the helix. The LLM 
+analog is that tokens whose next-token prediction is ``easy'' need not 
+traverse all $K$ stages.
+
+At each merge boundary (after stage $k$, $k < K-1$), we attach a 
+lightweight \emph{exit head}:
+\begin{equation}\label{eq:exit-head}
+  \hat{p}_k(x_{t+1} \mid \mathbf{x}_{\leq t}) = 
+  \softmax\bigl(W_k^{\text{exit}} \cdot 
+  \text{LN}(\bar{\mathbf{h}}_t^{(k)}) + \mathbf{b}_k^{\text{exit}}\bigr),
+\end{equation}
+where $\bar{\mathbf{h}}_t^{(k)}$ is the merged representation at the end 
+of stage $k$ (or the mean over streams if exit is evaluated before merge).
+
+\subsubsection{Cross-Stream Agreement as Confidence}
+
+When multiple streams are active, we define a \emph{cross-stream 
+agreement} score:
+\begin{equation}\label{eq:agreement}
+  \text{Agree}_t^{(k)} = \frac{1}{\binom{S_k}{2}} 
+  \sum_{s < s'} \cos\bigl(\mathbf{h}_{t,s}^{(k, L_k)},\; 
+  \mathbf{h}_{t,s'}^{(k, L_k)}\bigr),
+\end{equation}
+where $\cos(\cdot, \cdot)$ denotes cosine similarity. This measures the 
+degree to which independent processing streams have converged to the same 
+representation for token $t$.
+
+\begin{definition}[Early exit criterion]\label{def:exit}
+Token $t$ exits at stage $k$ if:
+\begin{equation}\label{eq:exit-crit}
+  \text{Agree}_t^{(k)} > \tau_{\text{conf}} 
+  \quad\text{and}\quad 
+  \Ent\bigl[\hat{p}_k(\cdot \mid \mathbf{x}_{\leq t})\bigr] < 
+  \tau_{\text{ent}},
+\end{equation}
+where $\Ent[\cdot]$ denotes entropy and $\tau_{\text{conf}}, 
+\tau_{\text{ent}}$ are thresholds. The first condition requires 
+cross-stream consensus (Felix's convergence detection); the second 
+requires the prediction itself to be low-entropy.
+\end{definition}
+
+\subsubsection{Training Objective with Deep Supervision}
+
+During training, all tokens traverse all stages (no early exit). The loss 
+combines predictions from all exit points and the final output:
+\begin{equation}\label{eq:loss}
+  \Lcal = \sum_{k=0}^{K-1} \lambda_k \cdot \Lcal_k, 
+  \quad\text{where}\quad 
+  \Lcal_k = -\frac{1}{T}\sum_{t=1}^{T} 
+  \log \hat{p}_k(x_{t+1} \mid \mathbf{x}_{\leq t}),
+\end{equation}
+with weights $\lambda_k$ satisfying $\sum_k \lambda_k = 1$ and 
+$\lambda_{K-1} > \lambda_k$ for $k < K-1$ (the final stage is weighted 
+most heavily). This deep supervision encourages useful representations at 
+every stage, enabling meaningful early exit at inference time.
+
+\subsection{Output Head}\label{sec:output}
+
+The final output is produced from the single stream at the end of 
+stage $K-1$:
+\begin{equation}
+  p(x_{t+1} \mid \mathbf{x}_{\leq t}) = 
+  \softmax\bigl(W^{\text{out}} \cdot 
+  \text{LN}(\mathbf{h}_{t,1}^{(K-1, L_{K-1})}) + 
+  \mathbf{b}^{\text{out}}\bigr),
+\end{equation}
+where $W^{\text{out}} \in \R^{V \times d_{K-1}}$ may optionally be 
+tied to the input embedding matrix (transposed).
+
+\subsection{Full Forward Pass}\label{sec:forward}
+
+For completeness, the full forward pass for a sequence $\mathbf{x}$ is 
+given in Algorithm~\ref{alg:forward}.
+
+\begin{algorithm}[h]
+\caption{Felix-LM Forward Pass}\label{alg:forward}
+\begin{algorithmic}[1]
+\Require Sequence $\mathbf{x} = (x_1, \ldots, x_T)$; stages 
+  $k = 0, \ldots, K{-}1$
+\State $\mathbf{e}_t \gets \text{Embed}(x_t)$ for all $t$
+\For{$s = 1, \ldots, S_0$} \Comment{Initialize streams}
+  \State $\mathbf{h}_{t,s}^{(0,0)} \gets W_s^{\text{init}} 
+    \mathbf{e}_t + \mathbf{b}_s^{\text{init}}$ for all $t$
+\EndFor
+\For{$k = 0, \ldots, K{-}1$} \Comment{Process stages}
+  \For{$s = 1, \ldots, S_k$} \Comment{Independent streams}
+    \For{$\ell = 0, \ldots, L_k - 1$} \Comment{Layers within stream}
+      \State $\mathbf{h}_{:,s}^{(k,\ell+1)} \gets 
+        \text{TransformerLayer}_{k,\ell,s}\bigl(
+        \mathbf{h}_{:,s}^{(k,\ell)}\bigr)$ 
+        \Comment{Eq.~\ref{eq:attn-residual}--\ref{eq:ffn-residual}}
+    \EndFor
+  \EndFor
+  \If{$k < K{-}1$} \Comment{Merge into next stage}
+    \State Pair streams: $(s_1, s_2), (s_3, s_4), \ldots$
+    \For{each pair $(s, s')$}
+      \State $\mathbf{h}_{:,\text{new}}^{(k+1, 0)} \gets 
+        \text{Merge}_k\bigl(\mathbf{h}_{:,s}^{(k,L_k)},\; 
+        \mathbf{h}_{:,s'}^{(k,L_k)}\bigr)$ 
+        \Comment{Eq.~\ref{eq:merge-full}}
+    \EndFor
+    \State Compute exit loss $\Lcal_k$ 
+      \Comment{Eq.~\ref{eq:loss}}
+  \EndIf
+\EndFor
+\State \Return $\softmax\bigl(W^{\text{out}} \cdot 
+  \text{LN}(\mathbf{h}_{:,1}^{(K-1, L_{K-1})})\bigr)$
+\end{algorithmic}
+\end{algorithm}
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Theoretical Analysis}\label{sec:theory}
+
+\subsection{Information-Theoretic Capacity}\label{sec:info-theory}
+
+We analyze the representational capacity of the multi-stream architecture 
+relative to a uniform transformer of equal parameter count.
+
+\begin{proposition}[Parameter distribution]\label{prop:params}
+Consider a Felix-LM model with $K$ stages, stream counts 
+$(S_0, \ldots, S_{K-1})$, dimensions $(d_0, \ldots, d_{K-1})$, and layer 
+counts $(L_0, \ldots, L_{K-1})$. Ignoring embedding and output layers, 
+the total parameter count is approximately:
+\begin{equation}\label{eq:param-count}
+  N_{\text{Felix}} \approx \sum_{k=0}^{K-1} S_k \cdot L_k \cdot 
+  \bigl(4d_k^2 + 8d_k^2\bigr) + \sum_{k=0}^{K-2} 
+  \bigl(4d_k \cdot d_{k+1} + 8d_k^2\bigr),
+\end{equation}
+where $4d_k^2$ accounts for attention projections ($W_Q, W_K, W_V, W_O$, 
+each $d_k \times d_k$, simplified for single-head), $8d_k^2$ for the FFN 
+(two layers of $d_k \times 4d_k$), and the merge terms account for the 
+gating and projection matrices.
+
+A uniform transformer with $L$ layers of dimension $d$ has:
+\begin{equation}
+  N_{\text{uniform}} \approx L \cdot 12d^2.
+\end{equation}
+\end{proposition}
+
+The design constraint is $N_{\text{Felix}} \approx N_{\text{uniform}}$ for 
+fair comparison. Given this constraint, the Felix-LM model distributes 
+parameters differently: more parameters are allocated to early-stage 
+parallel streams (broad exploration) and fewer to late-stage computation 
+(focused synthesis, but only one stream).
+
+\begin{proposition}[Representation diversity bound]\label{prop:diversity}
+At the output of Stage~0, the $S_0$ independent streams produce $S_0$ 
+distinct representations for each token. Under the \textsc{Independent} 
+weight configuration, the total representational capacity (measured as the 
+dimension of the space of possible token representations) is:
+\begin{equation}
+  \dim\bigl(\text{range of Stage 0}\bigr) = S_0 \cdot d_0,
+\end{equation}
+which exceeds the capacity $d_0$ of any individual stream. The merge 
+operation projects this $S_0 \cdot d_0$-dimensional representation down to 
+$d_1$-dimensional, with the gate $\mathbf{g}_k$ performing learned 
+dimensionality selection.
+
+For a uniform transformer, the representation at any intermediate layer 
+has capacity $d_{\text{model}}$. If $S_0 \cdot d_0 > d_{\text{model}}$ 
+(which holds whenever the streams collectively span more dimensions than 
+the uniform model's width), Stage~0 of Felix-LM can represent a strictly 
+richer space of initial features before compression.
+\end{proposition}
+
+\subsection{Gradient Flow Analysis}\label{sec:gradients}
+
+A critical concern with dimension-changing architectures is gradient flow 
+degradation. We analyze the gradient of the loss with respect to early-stage 
+parameters.
+
+\begin{proposition}[Gradient path through merges]
+\label{prop:grad-merge}
+Let $\Lcal$ be the training loss and consider the gradient with respect to 
+a parameter $\theta$ in stream $s$ of Stage~0. The gradient flows 
+backward through:
+\begin{equation}
+  \frac{\partial \Lcal}{\partial \theta} = 
+  \frac{\partial \Lcal}{\partial \mathbf{h}^{(K-1)}} \cdot
+  \prod_{k=K-2}^{0} \underbrace{\frac{\partial 
+  \mathbf{h}^{(k+1)}}{\partial \mathbf{h}^{(k)}}}_{\text{merge Jacobian}} 
+  \cdot \frac{\partial \mathbf{h}^{(0)}}{\partial \theta}.
+\end{equation}
+
+The merge Jacobian has the form:
+\begin{equation}\label{eq:merge-jacobian}
+  J_k^{\text{merge}} = P_k \cdot \diag\bigl(\mathbf{g}_k + 
+  \mathbf{g}_k' \odot [\mathbf{h}_s; \mathbf{h}_{s'}]\bigr),
+\end{equation}
+where $\mathbf{g}_k' = \mathbf{g}_k \odot (1 - \mathbf{g}_k)$ is the 
+sigmoid derivative. If the gate saturates ($g_{k,i} \to 0$ or $g_{k,i} 
+\to 1$), the Jacobian for that dimension reduces to $P_k \cdot 
+\diag(\mathbf{g}_k)$ (the derivative term vanishes), and gradient flows 
+through the non-gated pathway.
+\end{proposition}
+
+\begin{corollary}[Gradient preservation under orthogonal merges]
+If $P_k$ has orthonormal rows ($P_k P_k^\top = I$), then the merge 
+preserves gradient norms in the following sense:
+\begin{equation}
+  \bigl\|J_k^{\text{merge}} \mathbf{v}\bigr\| \geq 
+  \min_i(g_{k,i}) \cdot \|\mathbf{v}\|
+\end{equation}
+for any gradient vector $\mathbf{v}$, provided all gates are open 
+($g_{k,i} = 1$). Gradient vanishing through the merge is thus controlled 
+by the gate values, not by the projection geometry.
+\end{corollary}
+
+This motivates initializing the gate biases $\mathbf{b}_k^g$ to positive 
+values (gates start open) and optionally constraining $P_k$ to be 
+orthogonal, especially in deeper models.
+
+\paragraph{Deep supervision as gradient highway.}
+The deep supervision loss (\cref{eq:loss}) provides an additional gradient 
+pathway: each exit head injects gradients directly into its corresponding 
+stage without passing through downstream merges. This ensures that even if 
+merge gradients attenuate, every stage receives direct supervisory signal.
+
+\subsection{Representational Geometry}\label{sec:rep-geom}
+
+We now establish that the Felix-LM architecture induces the helical funnel 
+trajectory of \cref{def:helical-traj}.
+
+\begin{theorem}[Helical funnel trajectory]\label{thm:helical}
+Under the Felix-LM architecture with depth-extended RoPE 
+(\cref{def:depth-rope}) and gated merge operations 
+(\cref{def:merge}), the representation trajectory 
+$\gamma(\mathbf{x})$ satisfies \cref{def:helical-traj} 
+with:
+\begin{enumerate}[label=(\alph*)]
+  \item Angular velocity determined by the depth-RoPE frequencies 
+    $\theta_i^{\text{depth}}$ within stages and by the polar decomposition 
+    of $P_k$ at merge boundaries;
+  \item Radial compression rate $\rho^{(\ell)} = 1$ within stages 
+    (constant dimensionality) and $\rho^{(k \to k+1)} = d_{k+1} / 
+    (S_k \cdot d_k)$ at merges;
+  \item Effective dimensionality decreasing monotonically as 
+    $d_{\text{eff}}^{(\text{after stage } k)} = d_{k+1}$, from an initial 
+    capacity of $S_0 \cdot d_0$ to a final capacity of $d_{K-1}$.
+\end{enumerate}
+\end{theorem}
+\begin{proof}[Proof sketch]
+Within a stage, RMSNorm preserves the subspace, and depth-extended RoPE 
+applies an explicit rotation via the depth-frequency term in 
+\cref{eq:composite-angle}. This satisfies the 
+$Q^{(\ell)}$ term of \cref{eq:helical-decomp} with the gate 
+being the identity ($\mathbf{g} = \mathbf{1}$, no compression within 
+stages).
+
+At a merge boundary, the concatenation of $S_k$ stream representations 
+embeds them in $\R^{S_k \cdot d_k}$. The gated projection 
+$P_k(\mathbf{g}_k \odot [\cdot])$ decomposes via polar decomposition 
+(\cref{eq:polar}) into rotation ($V_k^\top$, $U_k$) and 
+scaling ($\Sigma_k$), with the gate $\mathbf{g}_k$ providing additional 
+soft dimensionality reduction. The post-merge dimension $d_{k+1} < S_k 
+\cdot d_k$ gives $\rho < 1$, completing the compression step.
+
+The trajectory therefore alternates between rotation-only phases 
+(within-stage, via depth-RoPE) and rotation-with-compression phases 
+(at merges), tracing a helical funnel as defined.
+\end{proof}
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Connection to the Felix Framework}\label{sec:felix-mapping}
+
+The architecture is parameterized to allow direct configuration from the 
+Felix framework's YAML specification. The mapping is:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Felix Parameter} & \textbf{Felix-LM Analog} & \textbf{Mapping} \\
+\midrule
+\texttt{top\_radius} ($R_{\max}$) & Initial stream count $S_0$ & 
+  $S_0 = 2^{\lceil \log_2 R_{\max} \rceil}$ \\
+\texttt{bottom\_radius} ($R_{\min}$) & Final stream count $S_{K-1}$ & 
+  $S_{K-1} = 1$ (always) \\
+\texttt{turns} ($n$) & Stage transitions $K - 1$ & 
+  $K = n + 1$ \\
+\texttt{height} ($H$) & Total layers $L_{\text{total}}$ & 
+  $L_{\text{total}} \propto H$ \\
+\texttt{confidence\_threshold} & Exit threshold $\tau_{\text{conf}}$ & 
+  Direct mapping \\
+\texttt{temperature\_range} & Attention type per stage & 
+  See \S\ref{sec:intra-stream} \\
+\texttt{compression\_ratio} & Merge compression & 
+  $d_{k+1} / (2 d_k)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The exponential tapering function (\cref{eq:felix-radius}) determines the 
+rate of stream merging: if $R(t)$ decreases exponentially, stream counts 
+decrease by factors of 2 at each stage (binary merging), yielding $S_k = 
+S_0 / 2^k$. Alternative merging schedules (e.g., merging 3-to-1) 
+correspond to steeper radius decay.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Proposed Experiments}\label{sec:experiments}
+
+\subsection{Ablation Study Design}
+
+All models are trained on WikiText-103 \cite{merity2017pointer} with 
+identical optimization hyperparameters. The evaluation metric is 
+perplexity on the held-out test set.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}clp{8cm}@{}}
+\toprule
+\textbf{Model} & \textbf{Name} & \textbf{Configuration} \\
+\midrule
+M0 & \textsc{Uniform} & Standard transformer, $L$ layers, $d$ width. 
+  Parameter-matched baseline. \\
+M1 & \textsc{MSPM-Homo} & Multi-stream progressive merging; all stages 
+  use standard causal attention. Tests the stream-merge structure alone. \\
+M2 & \textsc{MSPM-Hetero} & As M1, but Stage~0 uses linear attention, 
+  intermediate stages use sliding-window, final stage uses full causal 
+  attention. Tests heterogeneous computation. \\
+M3 & \textsc{MSPM-Exit} & As M2, plus early-exit heads with 
+  cross-stream agreement gating. Tests adaptive depth. \\
+M4 & \textsc{Narrow-$d$} & Single stream throughout, but $d_{\text{model}}$ 
+  decreases across stages (the ``narrow funnel'' hypothesis). Controls 
+  for stream merging vs.\ dimension narrowing. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Controlled variables.}
+Total parameter count $N \approx 10\text{M}$ ($\pm 5\%$), context length 
+$T = 512$, vocabulary from WikiText-103 BPE tokenizer, AdamW optimizer 
+with cosine learning rate schedule, batch size, warmup steps, and total 
+training tokens are held constant across all models.
+
+\subsection{Hypotheses}
+
+\begin{enumerate}[label=\textbf{H\arabic*.}, leftmargin=2.5em]
+  \item M1 achieves lower perplexity than M0, indicating that the 
+    multi-stream progressive merging structure provides a useful inductive 
+    bias for language modeling.
+  \item M2 achieves lower perplexity than M1, indicating that 
+    heterogeneous attention types aligned to stage roles improve 
+    performance beyond the structural bias alone.
+  \item M3 achieves comparable or better perplexity to M2 while reducing 
+    average inference FLOPs (via early exit on easy tokens).
+  \item M4 achieves worse perplexity than M1, indicating that the funnel 
+    should operate on stream count rather than model dimension.
+\end{enumerate}
+
+\subsection{Diagnostic Metrics}
+
+Beyond perplexity, we propose monitoring:
+\begin{itemize}[nosep]
+  \item \textbf{Cross-stream agreement} (\cref{eq:agreement}) over 
+    training---do streams converge to specialization or redundancy?
+  \item \textbf{Gate activation statistics}: distribution of 
+    $\mathbf{g}_k$ values at each merge, tracking which dimensions are 
+    preserved versus suppressed.
+  \item \textbf{Exit rate by stage}: at inference time, what fraction of 
+    tokens exit at each stage?
+  \item \textbf{Per-stage loss}: $\Lcal_k$ for each stage, measuring 
+    whether early stages learn useful intermediate predictions.
+  \item \textbf{Effective dimensionality} (\cref{def:eff-dim}) at each 
+    merge output, measuring realized compression.
+\end{itemize}
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Extensions and Open Questions}\label{sec:extensions}
+
+\paragraph{Sequence-dimension funneling.}
+The current design funnels along the stream/feature axis. An orthogonal 
+extension is to pool tokens at merge boundaries (reducing sequence length), 
+providing a second axis of compression. The interaction between 
+feature-funneling and sequence-funneling is unexplored and theoretically 
+interesting: it corresponds to the Felix helix narrowing in both radius 
+(feature) and height per turn (sequence).
+
+\paragraph{Skip connections across stages.}
+The depth-extended RoPE provides a natural framework for cross-stage 
+residual connections, since representations at different depths are in 
+well-defined rotational relationships. A skip connection from Stage~0 to 
+Stage~2 would require projecting across different dimensions, but the 
+rotary structure provides a principled way to align the coordinate frames.
+
+\paragraph{Scaling laws.}
+If the architecture proves competitive at $10$M parameters, the next 
+question is whether the multi-stream structure obeys favorable scaling 
+laws. The additional parameters in merge operations and multiple stream 
+initializations represent overhead; whether this overhead amortizes 
+favorably with scale is an empirical question.
+
+\paragraph{Hybrid SSM-Attention.}
+The heterogeneous attention strategy (\S\ref{sec:intra-stream}) points 
+toward a principled framework for combining state-space models (Mamba, 
+RWKV) with attention: use SSMs for cheap broad context gathering in early 
+stages and attention for precise synthesis in late stages. This is 
+consonant with the Felix principle that early agents are broad/cheap and 
+late agents are focused/expensive.
+
+\paragraph{Non-binary merging.}
+The current design merges streams in pairs. For $S_0$ that is not a power 
+of 2, or for more aggressive funneling, $k$-way merges (concatenating $k > 
+2$ streams before projection) may be preferable. The gating and projection 
+mathematics extend naturally.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Related Work}\label{sec:related}
+
+\paragraph{Funnel architectures.}
+FunnelTransformer \cite{dai2020funnel} narrows the sequence dimension 
+via pooling in encoder models. Felix-LM differs in two ways: it narrows 
+the stream/feature axis (not sequence), and it targets autoregressive 
+(causal) language modeling rather than bidirectional encoding.
+
+\paragraph{Mixture of Experts / Mixture of Depths.}
+Mixture-of-Experts models \cite{shazeer2017outrageously, fedus2022switch} 
+route tokens to different sub-networks at each layer. Felix-LM's 
+multi-stream structure is superficially similar but structurally distinct: 
+in MoE, routing is per-token and per-layer; in Felix-LM, all tokens follow 
+the same multi-stream structure, and the streams interact only at merge 
+points. Mixture of Depths \cite{raposo2024mixture} allows tokens to skip 
+layers, which is related to our early-exit mechanism.
+
+\paragraph{Rotary embeddings.}
+RoPE \cite{su2021roformer} and its extensions (YaRN 
+\cite{peng2023yarn}, NTK-aware scaling) manipulate the rotation 
+frequencies for context extension. Our depth-extended RoPE adds a new 
+axis (layer index) to the rotation, which to our knowledge has not been 
+explored in the literature.
+
+\paragraph{Adaptive computation.}
+Universal Transformer \cite{dehghani2019universal} and PonderNet 
+\cite{banino2021pondernet} implement depth-adaptive computation via 
+halting mechanisms. Felix-LM's cross-stream agreement provides a novel 
+confidence signal unavailable in single-stream architectures.
+
+\paragraph{Geometric deep learning.}
+Clifford Algebra Networks \cite{ruhe2023geometric} and related work on 
+rotation-equivariant architectures \cite{thomas2018tensor, 
+fuchs2020se3transformers} provide rigorous frameworks for incorporating 
+geometric structure. Felix-LM's helical trajectory is a softer form of 
+geometric inductive bias: it does not enforce strict equivariance but 
+encourages helical representation dynamics through architectural structure 
+and initialization.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section{Discussion}\label{sec:discussion}
+
+The central hypothesis of this work is that the principles underlying the 
+Felix multi-agent framework---parallel exploration, progressive 
+convergence, depth-dependent computation, and confidence-gated resource 
+allocation---provide a useful inductive bias when instantiated in the 
+architecture of a causal language model.
+
+We have been deliberately conservative in our claims. The proposed 
+architecture introduces complexity: multiple streams increase memory 
+requirements (though not FLOPs, since streams can be processed 
+sequentially), merge operations add parameters, and heterogeneous attention 
+types complicate implementation. Whether the inductive bias is strong 
+enough to compensate for this added complexity is an empirical question 
+that the proposed ablation study is designed to answer.
+
+The most novel contribution, independent of whether the full architecture 
+proves competitive, is the \emph{cross-stream agreement} signal for 
+confidence estimation. This provides a measure of representational 
+robustness---the degree to which independent processing pathways converge 
+on the same answer---that has no analog in single-stream architectures 
+and may find applications in uncertainty quantification and hallucination 
+detection beyond language modeling.
+
+% ═════════════════════════════════════════════════════════════════════════
+\section*{Acknowledgments}
+
+The Felix multi-agent framework was developed by Caleb [Surname]. The 
+Multi-Stream Progressive Merging architecture was developed through 
+iterative collaboration between C.\ [Surname] and AI design assistants 
+(Claude, Anthropic). The authors thank [physicist and mathematician 
+reviewers] for their feedback on the mathematical formalism.
+
+% ═════════════════════════════════════════════════════════════════════════
+% References (manual for now; switch to BibTeX for final version)
+\begin{thebibliography}{99}
+
+\bibitem{vaswani2017attention}
+A.~Vaswani et al., ``Attention is All You Need,'' \textit{NeurIPS}, 2017.
+
+\bibitem{radford2019language}
+A.~Radford et al., ``Language Models are Unsupervised Multitask Learners,'' 
+\textit{OpenAI Technical Report}, 2019.
+
+\bibitem{tenney2019bert}
+I.~Tenney, D.~Das, E.~Pavlick, ``BERT Rediscovers the Classical NLP 
+Pipeline,'' \textit{ACL}, 2019.
+
+\bibitem{clark2019what}
+K.~Clark, U.~Khandelwal, O.~Levy, C.D.~Manning, ``What Does BERT Look At? 
+An Analysis of BERT's Attention,'' \textit{BlackboxNLP Workshop}, 2019.
+
+\bibitem{su2021roformer}
+J.~Su et al., ``RoFormer: Enhanced Transformer with Rotary Position 
+Embedding,'' \textit{arXiv:2104.09864}, 2021.
+
+\bibitem{zhang2019root}
+B.~Zhang, R.~Sennrich, ``Root Mean Square Layer Normalization,'' 
+\textit{NeurIPS}, 2019.
+
+\bibitem{merity2017pointer}
+S.~Merity, C.~Xiong, J.~Bradbury, R.~Socher, ``Pointer Sentinel Mixture 
+Models,'' \textit{ICLR}, 2017.
+
+\bibitem{dai2020funnel}
+Z.~Dai, et al., ``Funnel-Transformer: Filtering out Sequential Redundancy 
+for Efficient Language Processing,'' \textit{NeurIPS}, 2020.
+
+\bibitem{shazeer2017outrageously}
+N.~Shazeer et al., ``Outrageously Large Neural Networks: The 
+Sparsely-Gated Mixture-of-Experts Layer,'' \textit{ICLR}, 2017.
+
+\bibitem{fedus2022switch}
+W.~Fedus, B.~Zoph, N.~Shazeer, ``Switch Transformers: Scaling to Trillion 
+Parameter Models with Simple and Efficient Sparsity,'' \textit{JMLR}, 2022.
+
+\bibitem{raposo2024mixture}
+D.~Raposo et al., ``Mixture-of-Depths: Dynamically Allocating Compute in 
+Transformer-Based Language Models,'' \textit{arXiv:2404.02258}, 2024.
+
+\bibitem{peng2023yarn}
+B.~Peng et al., ``YaRN: Efficient Context Window Extension of Large 
+Language Models,'' \textit{arXiv:2309.00071}, 2023.
+
+\bibitem{dehghani2019universal}
+M.~Dehghani et al., ``Universal Transformers,'' \textit{ICLR}, 2019.
+
+\bibitem{banino2021pondernet}
+A.~Banino et al., ``PonderNet: Learning to Ponder,'' 
+\textit{arXiv:2107.05407}, 2021.
+
+\bibitem{ruhe2023geometric}
+D.~Ruhe et al., ``Geometric Clifford Algebra Networks,'' 
+\textit{ICML}, 2023.
+
+\bibitem{thomas2018tensor}
+N.~Thomas et al., ``Tensor Field Networks: Rotation- and 
+Translation-Equivariant Neural Networks for 3D Point Clouds,'' 
+\textit{arXiv:1802.08219}, 2018.
+
+\bibitem{fuchs2020se3transformers}
+F.~Fuchs et al., ``SE(3)-Transformers: 3D Roto-Translation Equivariant 
+Attention Networks,'' \textit{NeurIPS}, 2020.
+
+\end{thebibliography}
+
+% ═════════════════════════════════════════════════════════════════════════
+\appendix
+
+\section{Initialization Strategy}\label{sec:init}
+
+The stream initialization projections $W_s^{\text{init}}$ 
+(\cref{eq:stream-init}) should encourage diverse initial representations. 
+We propose initializing them as orthogonal subspace projections.
+
+Let $d_{\text{embed}} \geq S_0 \cdot d_0$. Generate a random orthogonal 
+matrix $Q \in \R^{d_{\text{embed}} \times d_{\text{embed}}}$ (via QR 
+decomposition of a random Gaussian matrix) and partition its rows into 
+$S_0$ blocks of size $d_0$:
+\begin{equation}
+  W_s^{\text{init}} = Q_{[(s-1)d_0 : s \cdot d_0,\; :]}.
+\end{equation}
+
+This ensures that the initial stream representations are projections onto 
+orthogonal subspaces of the embedding, maximizing initial diversity. Under 
+this initialization:
+\begin{equation}
+  \langle W_s^{\text{init}} \mathbf{e}, W_{s'}^{\text{init}} 
+  \mathbf{e}\rangle = 0 \quad \text{for } s \neq s',
+\end{equation}
+for any input $\mathbf{e}$, guaranteeing that streams start with 
+completely independent views of the input.
+
+\section{Parameter Count Calculations}\label{sec:param-calc}
+
+We provide exact parameter count formulas for the ablation models, 
+parameterized to target $N \approx 10$M.
+
+For each model, the total parameters are:
+\[
+  N = N_{\text{embed}} + N_{\text{stages}} + N_{\text{merges}} + 
+  N_{\text{exits}} + N_{\text{output}},
+\]
+where:
+\begin{align}
+  N_{\text{embed}} &= V \cdot d_{\text{embed}} + S_0 \cdot d_0 \cdot 
+    d_{\text{embed}}, \\
+  N_{\text{stages}} &= \sum_{k=0}^{K-1} S_k \cdot L_k \cdot 
+    \bigl(4 d_k^2 + 2 \cdot d_k \cdot 4d_k\bigr), \\
+  N_{\text{merges}} &= \sum_{k=0}^{K-2} \frac{S_k}{2} \cdot 
+    \bigl(d_{k+1} \cdot 2d_k + 2d_k \cdot 2d_k\bigr), \\
+  N_{\text{exits}} &= \sum_{k=0}^{K-2} \bigl(d_k \cdot V\bigr), \\
+  N_{\text{output}} &= d_{K-1} \cdot V.
+\end{align}
+
+Concrete configurations for each model will be computed numerically under 
+the constraint $N = 10 \times 10^6 \pm 5\%$.
+
+\end{document}

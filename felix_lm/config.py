@@ -123,7 +123,8 @@ class FelixConfig:
             d_next = self.stages[k + 1].dim
             num_merge_pairs = self.stages[k].num_streams // 2
             per_merge = (
-                2 * d_k * 2 * d_k + 2 * d_k  # gate weight + bias
+                2 * d_k * 2 * d_k
+                + 2 * d_k  # gate weight + bias
                 + d_next * 2 * d_k  # projection weight
             )
             n_merges += num_merge_pairs * per_merge
@@ -197,7 +198,9 @@ class FelixConfig:
             weight = 1.0 + 0.25 * k
             layers_per_stage.append(weight)
         total_weight = sum(layers_per_stage)
-        layers_per_stage = [max(1, round(w / total_weight * total_layers)) for w in layers_per_stage]
+        layers_per_stage = [
+            max(1, round(w / total_weight * total_layers)) for w in layers_per_stage
+        ]
 
         # Adjust to match total
         diff = total_layers - sum(layers_per_stage)
@@ -268,6 +271,75 @@ def make_m2_config() -> FelixConfig:
         ],
         rope_helical_turns=2,
         use_deep_supervision=True,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_fullcausal_config() -> FelixConfig:
+    """M2 with full causal attention everywhere (isolates multi-stream vs attention type)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=True,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_nosup_config() -> FelixConfig:
+    """M2 with deep supervision disabled (isolates supervision effect)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
         tie_embeddings=True,
     )
 
