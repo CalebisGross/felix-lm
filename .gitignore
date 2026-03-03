@@ -50,6 +50,9 @@ notebooks/
 *.out
 *.synctex.gz
 
+# ANE bridge binary (build from source with: cd ane && make)
+*.dylib
+
 # Misc
 *.log
 .env

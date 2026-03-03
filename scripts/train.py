@@ -18,6 +18,7 @@ from tqdm import tqdm
 from felix_lm.config import (
     FelixConfig,
     make_m0_config,
+    make_m2_best_config,
     make_m2_config,
     make_m2_fullcausal_config,
     make_m2_nosup_config,
@@ -90,24 +91,42 @@ def get_lr(step: int, warmup_steps: int, max_steps: int, max_lr: float, min_lr: 
 
 def train(config: FelixConfig, args):
     device = torch.device(args.device)
+    use_mps = device.type == "mps"
     print(f"\nDevice: {device}")
     if device.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
     # Model
     model = FelixLM(config).to(device)
+    if args.compile:
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model)
     n_params = count_parameters(model)
     print(f"\nModel: {config.num_stages} stages, {config.total_layers} layers, {n_params:,} params")
 
-    # Data
+    # Autocast setup for mixed precision
+    if use_mps:
+        autocast_ctx = torch.autocast("mps", dtype=torch.float16)
+        print("  Mixed precision: fp16 via MPS autocast")
+    elif device.type == "cuda":
+        autocast_ctx = torch.autocast("cuda", dtype=torch.float16)
+        print("  Mixed precision: fp16 via CUDA autocast")
+    else:
+        autocast_ctx = torch.autocast("cpu", enabled=False)
+
+    # Data — num_workers=0 on macOS (fork overhead), 2 on Linux
+    num_workers = 0 if use_mps else 2
+    pin_memory = not use_mps
     train_ds = WikiTextDataset("train", seq_len=args.seq_len, cache_dir=args.data_dir)
     val_ds = WikiTextDataset("validation", seq_len=args.seq_len, cache_dir=args.data_dir)
 
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True
+        train_ds, batch_size=args.batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=pin_memory,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True
+        val_ds, batch_size=args.batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=pin_memory,
     )
 
     # Optimizer
@@ -166,7 +185,8 @@ def train(config: FelixConfig, args):
             targets = targets.to(device)
 
             # Forward
-            result = model(input_ids, targets)
+            with autocast_ctx:
+                result = model(input_ids, targets)
             loss = result["loss"] / accum_steps  # scale for accumulation
             loss.backward()
 
@@ -207,10 +227,10 @@ def train(config: FelixConfig, args):
                     }
                     if last_result and "per_stage_losses" in last_result:
                         for k, sl in enumerate(last_result["per_stage_losses"]):
-                            log_dict[f"train/stage_{k}_loss"] = sl
+                            log_dict[f"train/stage_{k}_loss"] = sl.item() if hasattr(sl, "item") else sl
                     if last_result and "stream_agreements" in last_result:
                         for k, ag in enumerate(last_result["stream_agreements"]):
-                            log_dict[f"train/agreement_merge_{k}"] = ag
+                            log_dict[f"train/agreement_merge_{k}"] = ag.item() if hasattr(ag, "item") else ag
 
                     import wandb
 
@@ -264,11 +284,18 @@ def evaluate(model, dataloader, device) -> float:
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    use_mps = device.type == "mps"
+    autocast_ctx = (
+        torch.autocast("mps", dtype=torch.float16) if use_mps
+        else torch.autocast("cuda", dtype=torch.float16) if device.type == "cuda"
+        else torch.autocast("cpu", enabled=False)
+    )
 
     for input_ids, targets in dataloader:
         input_ids = input_ids.to(device)
         targets = targets.to(device)
-        result = model(input_ids, targets)
+        with autocast_ctx:
+            result = model(input_ids, targets)
         total_loss += result["loss"].item() * input_ids.numel()
         total_tokens += input_ids.numel()
 
@@ -281,7 +308,7 @@ def main():
     parser.add_argument(
         "--config",
         default="m2",
-        choices=["m0", "m2", "m2_fullcausal", "m2_nosup"],
+        choices=["m0", "m2", "m2_fullcausal", "m2_nosup", "m2_best"],
         help="Model config",
     )
     parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
@@ -306,6 +333,7 @@ def main():
         "--checkpoint-dir", default=None, help="Checkpoint dir (default: ./checkpoints/<config>)"
     )
     parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile (speeds up MPS/CUDA)")
     args = parser.parse_args()
 
     args.use_wandb = not args.no_wandb
@@ -318,6 +346,7 @@ def main():
         "m0": make_m0_config,
         "m2_fullcausal": make_m2_fullcausal_config,
         "m2_nosup": make_m2_nosup_config,
+        "m2_best": make_m2_best_config,
     }
     config = configs[args.config]()
 

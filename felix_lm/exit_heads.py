@@ -86,7 +86,7 @@ class DeepSupervisionLoss(nn.Module):
 
     def forward(
         self, all_logits: list[torch.Tensor], targets: torch.Tensor
-    ) -> tuple[torch.Tensor, list[float]]:
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """Compute weighted loss across all stages.
 
         Args:
@@ -106,7 +106,7 @@ class DeepSupervisionLoss(nn.Module):
                 targets.reshape(-1),
                 reduction="mean",
             )
-            per_stage_losses.append(loss_k.item())
+            per_stage_losses.append(loss_k.detach())
             total_loss = total_loss + weight * loss_k
 
         return total_loss, per_stage_losses

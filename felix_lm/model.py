@@ -118,7 +118,7 @@ class FelixLM(nn.Module):
             if k < self.config.num_stages - 1:
                 # Record agreement before merge (for diagnostics)
                 agreement = compute_cross_stream_agreement(streams)
-                stream_agreements.append(agreement.mean().item())
+                stream_agreements.append(agreement.mean().detach())
 
                 # Merge pairs: (0,1), (2,3), ...
                 new_streams = []
@@ -165,6 +165,6 @@ class FelixLM(nn.Module):
                     reduction="mean",
                 )
                 result["loss"] = loss
-                result["per_stage_losses"] = [loss.item()]
+                result["per_stage_losses"] = [loss.detach()]
 
         return result

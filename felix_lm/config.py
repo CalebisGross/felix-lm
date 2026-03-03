@@ -344,6 +344,40 @@ def make_m2_nosup_config() -> FelixConfig:
     )
 
 
+def make_m2_best_config() -> FelixConfig:
+    """M2-BEST: Full causal + no deep supervision (combines best ablation flags)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
 def make_m0_config() -> FelixConfig:
     """M0 UNIFORM: Standard transformer baseline (~10M params)."""
     return FelixConfig(
