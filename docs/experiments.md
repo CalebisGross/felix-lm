@@ -70,7 +70,15 @@ Multi-stream merging adds value; linear attention was the bottleneck.
 **Params:** 11,092,608
 **Date:** 2026-03-03
 **Hypothesis:** Deep supervision forces early stages to predict tokens, hurting final output.
-**Status:** TRAINING IN PROGRESS
+
+| Split | Loss | PPL |
+|-------|------|-----|
+| Test | 4.7742 | 118.41 |
+
+**Key finding:** Removing deep supervision is the single biggest improvement (+32 PPL over M2).
+Closes to within 2.75 PPL of M0 baseline — even with hetero attention (linear in Stage 0).
+Deep supervision was actively harmful at this scale, likely because forcing early stages to
+predict tokens conflicts with learning good intermediate representations for merging.
 
 ---
 
@@ -78,7 +86,8 @@ Multi-stream merging adds value; linear attention was the bottleneck.
 
 ### Experiment 5: M2-BEST (fullcausal + no supervision)
 **Hypothesis:** Combining both improvements yields best small-scale result.
-**Blocked on:** Experiment 4 results.
+**Target:** Beat M0's 115.66 on overall metric.
+**Hardware:** Mac Mini M4 (MPS backend)
 
 ### Experiment 6: Scale to 100M params
 **Dataset:** FineWeb-Edu
@@ -94,4 +103,4 @@ Multi-stream merging adds value; linear attention was the bottleneck.
 | M0 (baseline) | full causal | N/A | **115.66** | — | — |
 | M2 | hetero | ON | 150.14 | 121.81 | +29.8% |
 | M2-fullcausal | full causal | ON | 129.09 | **107.49** | +11.6% |
-| M2-nosup | hetero | OFF | *pending* | *pending* | — |
+| M2-nosup | hetero | OFF | 118.41 | — | +2.4% |
