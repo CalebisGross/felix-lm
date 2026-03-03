@@ -7,11 +7,22 @@ Inspired by and evolved from the original Felix multi-agent framework concepts (
 but this is a standalone project — do not reference or import from older Felix codebases.
 
 ## Environment
+Two training machines are available. Always use `--device` appropriate to the machine:
+
+**Linux (primary):**
 - Python 3.12.3 (NOT 3.14 — PyTorch ROCm incompatible)
 - PyTorch with ROCm on AMD GPU (RX 7800 XT, 16GB VRAM)
+- Training: `python scripts/train.py --config <name> --batch-size 8 --grad-accum 4 --device cuda`
+
+**Mac Mini M4 (secondary):**
+- Python 3.12+, PyTorch with MPS backend (16GB unified memory)
+- Training: `python scripts/train.py --config <name> --batch-size 8 --grad-accum 4 --device mps`
+
+**Both machines:**
 - Venv: `source .venv/bin/activate`
 - Tests: `pytest tests/ -q`
-- Training: `python scripts/train.py --config <name> --batch-size 8 --grad-accum 4`
+- Always `git pull` before starting a run to ensure latest code
+- wandb logs to the same `felix-lm` project from both machines
 
 ## Architecture
 - 3 stages: Stage 0 (4 streams, dim=64) → Stage 1 (2 streams, dim=128) → Stage 2 (1 stream, dim=128)
@@ -39,7 +50,7 @@ but this is a standalone project — do not reference or import from older Felix
 1. Add config function to `felix_lm/config.py`
 2. Add config name to the choices in `scripts/train.py`
 3. Train: `python scripts/train.py --config <name> --batch-size 8 --grad-accum 4`
-4. Evaluate: `python scripts/evaluate.py --checkpoint checkpoints/<name>/best.pt --split test --device cuda --batch-size 8`
+4. Evaluate: `python scripts/evaluate.py --checkpoint checkpoints/<name>/best.pt --split test --device <cuda|mps> --batch-size 8`
 5. Record results in `docs/experiments.md`
 6. Update LaTeX paper (`felix_lm_design.tex`) with findings
 
