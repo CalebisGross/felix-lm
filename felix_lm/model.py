@@ -59,6 +59,11 @@ class FelixLM(nn.Module):
                     gate_bias_init=config.merge_gate_bias_init,
                     use_cross_stream_attention=config.use_cross_stream_attention,
                     use_orthogonal_merge=config.use_orthogonal_merge,
+                    token_conditional=config.token_conditional_gating,
+                    residual=config.residual_merge,
+                    bottleneck_ratio=config.merge_bottleneck_ratio,
+                    merge_type=config.merge_type,
+                    noise_std=config.merge_noise_std,
                 )
             )
 
@@ -108,6 +113,7 @@ class FelixLM(nn.Module):
 
         all_logits = []
         stream_agreements = []
+        divergence_loss = torch.tensor(0.0, device=token_ids.device)
 
         # Step 2: Process stages with merges
         for k in range(self.config.num_stages):
@@ -119,6 +125,33 @@ class FelixLM(nn.Module):
                 # Record agreement before merge (for diagnostics)
                 agreement = compute_cross_stream_agreement(streams)
                 stream_agreements.append(agreement.mean().detach())
+
+                # Stream divergence loss: maximize cosine distance between pairs
+                if self.config.stream_divergence_weight > 0 and len(streams) >= 2:
+                    for i in range(len(streams)):
+                        for j in range(i + 1, len(streams)):
+                            cos_sim = F.cosine_similarity(streams[i], streams[j], dim=-1).mean()
+                            divergence_loss = divergence_loss + cos_sim
+                    n_pairs = len(streams) * (len(streams) - 1) / 2
+                    divergence_loss = divergence_loss / n_pairs
+
+                # Stream dropout: randomly zero out streams before merge
+                if self.training and self.config.stream_dropout > 0:
+                    p = self.config.stream_dropout
+                    # Never drop both streams in a pair
+                    for i in range(0, len(streams), 2):
+                        if torch.rand(1).item() < p:
+                            # Drop one of the two streams randomly
+                            drop_idx = i + int(torch.rand(1).item() > 0.5)
+                            scale = 2.0  # scale survivor to compensate
+                            streams[drop_idx] = torch.zeros_like(streams[drop_idx])
+                            other = i + 1 - (drop_idx - i)
+                            streams[other] = streams[other] * scale
+
+                # Stream permutation: randomly shuffle merge pairings
+                if self.training and self.config.stream_permute and len(streams) > 2:
+                    perm = torch.randperm(len(streams))
+                    streams = [streams[p] for p in perm]
 
                 # Merge pairs: (0,1), (2,3), ...
                 new_streams = []
@@ -166,5 +199,11 @@ class FelixLM(nn.Module):
                 )
                 result["loss"] = loss
                 result["per_stage_losses"] = [loss.detach()]
+
+            # Add divergence loss (penalizes stream similarity)
+            if self.config.stream_divergence_weight > 0:
+                result["loss"] = result["loss"] + (
+                    self.config.stream_divergence_weight * divergence_loss
+                )
 
         return result

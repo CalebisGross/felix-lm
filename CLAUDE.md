@@ -32,12 +32,17 @@ Two training machines are available. Always use `--device` appropriate to the ma
 - Cross-stream agreement for confidence estimation
 
 ## Available Configs
-| Config | Description | Key Flags |
-|--------|-------------|-----------|
-| `m2` | MSPM-HETERO (primary) | linear→sliding_window→full_causal, deep supervision ON |
-| `m2_fullcausal` | All full causal attention | Tests multi-stream value independent of attention type |
-| `m2_nosup` | No deep supervision | Tests supervision effect on final output |
-| `m0` | Standard transformer baseline | 1 stream, 18 layers, full causal, parameter-matched |
+| Config | Streams | Attention | Deep Sup | Notes |
+|--------|---------|-----------|----------|-------|
+| `m0` | 1 (baseline) | full causal | N/A | Standard transformer, 18 layers |
+| `m2` | 4→2→1 | hetero | ON | Original MSPM-HETERO |
+| `m2_fullcausal` | 4→2→1 | full causal | ON | Isolates attention type |
+| `m2_nosup` | 4→2→1 | hetero | OFF | **Best config (118.41 PPL)** |
+| `m2_best` | 4→2→1 | full causal | OFF | Fullcausal + nosup combined |
+| `m2_nosup_backloaded` | 4→2→1 | hetero | OFF | 2/4/7 layer split |
+| `m2_2stream` | 2→1 | linear→full_causal | OFF | Wider streams, single merge |
+| `m2_8stream` | 8→4→2→1 | hetero | OFF | Narrower streams, more merges |
+| `m2_nosup_gate0` | 4→2→1 | hetero | OFF | Gate bias init=0.0 |
 
 ## Code Conventions
 - Config dataclasses in `felix_lm/config.py` — every new experiment variant gets a `make_<name>_config()` function
@@ -60,9 +65,26 @@ Two training machines are available. Always use `--device` appropriate to the ma
 - Don't commit checkpoints, data, or wandb logs (already in .gitignore)
 - The .tex source is tracked — update it with experimental results as they come in
 
+## Experiment Logging Rules (MANDATORY)
+This is a serious research project. Every experiment must be rigorously documented.
+
+- **Before running:** State the hypothesis and what variable is being tested
+- **After every run:** Immediately evaluate on test set and record results in `docs/experiments.md`
+- **Every entry must include:** config name, param count, date, hypothesis, test PPL, and a "key finding" interpreting the result
+- **Update the summary table** in `docs/experiments.md` after every experiment — no exceptions
+- **Negative results are results.** Document what didn't work and why. Failed experiments are as valuable as successes for guiding next steps
+- **Never skip evaluation.** Even for 2-epoch directional tests, run the eval and log it
+- **Compare apples to apples.** Always note epoch count, and compare against M2-nosup at the same training stage when doing shortened runs
+- **Keep `docs/research_directions.md` current** with updated priorities based on what we've learned
+
 ## Key Findings So Far
-- M2-fullcausal Stage 2 (final output) achieves 107.49 PPL, beating M0's 115.66
+
+- Deep supervision is the biggest bottleneck — removing it drops PPL by 32 points
+- M2-nosup (118.41) is best multi-stream config, within 2.4% of M0 baseline (115.66)
+- Hetero attention (linear→sliding_window→full_causal) is better than all-fullcausal when supervision is off
+- Linear attention in Stage 0 acts as beneficial regularizer without supervision
+- Backloading layers (2/4/7) hurts — early stages need depth for stream specialization
+- Fullcausal + nosup improvements are NOT additive (slightly antagonistic)
 - Streams genuinely specialize (pairwise cosine ~0.00 between stream weights)
 - Gates learn meaningful selectivity (~65% open after training)
-- Linear attention in Stage 0 is the main bottleneck at small scale
-- Multi-stream merging mechanism works; scaling is the next test
+- M2-fullcausal Stage 2 output (107.49) beats M0 (115.66), but weighted loss doesn't

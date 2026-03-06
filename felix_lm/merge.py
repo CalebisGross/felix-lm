@@ -1,4 +1,4 @@
-"""Gated merge operation (Section 3.3).
+"""Merge operations (Section 3.3).
 
 The merge is the architectural core of Felix-LM, implementing progressive
 convergence. It combines pairs of streams into a single stream:
@@ -10,7 +10,14 @@ where g_k is a sigmoid gate and P_k is a learned projection.
 Via polar decomposition (eq. 16), every merge naturally performs
 "rotation followed by compression" — the mathematical structure of
 a helical step.
+
+Extended with novel merge algorithms:
+- GeometricMerge: multiplicative feature conjunction
+- HadamardMerge: fixed orthogonal rotation + learned scaling
+- CompetitiveMerge: streams compete, winner routes forward
 """
+
+import math
 
 import torch
 import torch.nn as nn
@@ -30,6 +37,8 @@ class GatedMerge(nn.Module):
         d_out: Dimension of output stream (d_{k+1}).
         gate_bias_init: Initial bias for gate (positive = gates start open).
         use_orthogonal: If True, constrain projection via Cayley parameterization.
+        token_conditional: If True, use bottleneck MLP for content-dependent gating.
+        bottleneck_ratio: If >0, compress through d_out*ratio before expanding.
     """
 
     def __init__(
@@ -38,20 +47,43 @@ class GatedMerge(nn.Module):
         d_out: int,
         gate_bias_init: float = 1.0,
         use_orthogonal: bool = False,
+        token_conditional: bool = False,
+        residual: bool = False,
+        bottleneck_ratio: float = 0.0,
     ):
         super().__init__()
         self.d_in = d_in
         self.d_out = d_out
+        self.token_conditional = token_conditional
+        self.residual = residual
+        self.use_bottleneck = bottleneck_ratio > 0
 
-        # Gate: 2*d_k -> 2*d_k
-        self.gate = nn.Linear(2 * d_in, 2 * d_in)
-        # Initialize gate for good gradient flow (Corollary 4.4)
-        nn.init.zeros_(self.gate.weight)
-        nn.init.constant_(self.gate.bias, gate_bias_init)
+        if token_conditional:
+            # Bottleneck MLP gate: 2*d_k -> bottleneck -> 2*d_k
+            # Bottleneck = d_in (half of concat dim) for efficiency
+            bottleneck = d_in
+            self.gate_down = nn.Linear(2 * d_in, bottleneck)
+            self.gate_up = nn.Linear(bottleneck, 2 * d_in)
+            # Initialize so output starts near gate_bias_init
+            nn.init.zeros_(self.gate_down.weight)
+            nn.init.zeros_(self.gate_down.bias)
+            nn.init.zeros_(self.gate_up.weight)
+            nn.init.constant_(self.gate_up.bias, gate_bias_init)
+        else:
+            # Gate: 2*d_k -> 2*d_k
+            self.gate = nn.Linear(2 * d_in, 2 * d_in)
+            # Initialize gate for good gradient flow (Corollary 4.4)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.constant_(self.gate.bias, gate_bias_init)
 
         # Projection: 2*d_k -> d_{k+1}
         self.use_orthogonal = use_orthogonal
-        if use_orthogonal:
+        if self.use_bottleneck:
+            # Bottleneck autoencoder: 2*d_k -> tiny -> d_{k+1}
+            d_neck = max(4, int(d_out * bottleneck_ratio))
+            self.proj_down = nn.Linear(2 * d_in, d_neck, bias=False)
+            self.proj_up = nn.Linear(d_neck, d_out, bias=False)
+        elif use_orthogonal:
             # Cayley parameterization: P = (I - A)(I + A)^{-1} @ Pi (eq. 17)
             # A is a learnable skew-symmetric matrix
             self.A = nn.Parameter(torch.zeros(d_out, d_out) * 0.01)
@@ -59,6 +91,24 @@ class GatedMerge(nn.Module):
             self.register_buffer("Pi", torch.eye(2 * d_in)[:d_out, :])
         else:
             self.projection = nn.Linear(2 * d_in, d_out, bias=False)
+
+        # Residual skip connection for the merge
+        if residual:
+            if d_in == d_out:
+                # Same dim: skip is just the mean, no extra params
+                self.skip_proj = None
+            else:
+                # Different dims: learned projection for skip path
+                self.skip_proj = nn.Linear(d_in, d_out, bias=False)
+
+    def _compute_gate(self, z: torch.Tensor) -> torch.Tensor:
+        """Compute gate values from concatenated stream representations."""
+        if self.token_conditional:
+            # Bottleneck MLP: compress -> ReLU -> expand -> sigmoid
+            h = F.relu(self.gate_down(z))
+            return torch.sigmoid(self.gate_up(h))
+        else:
+            return torch.sigmoid(self.gate(z))
 
     def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
         """Merge two streams into one.
@@ -71,21 +121,135 @@ class GatedMerge(nn.Module):
             [B, T, d_{k+1}] merged representation.
         """
         z = torch.cat([h_s, h_s_prime], dim=-1)  # [B, T, 2*d_k]
-        g = torch.sigmoid(self.gate(z))  # [B, T, 2*d_k]
+        g = self._compute_gate(z)  # [B, T, 2*d_k]
         gated = g * z  # [B, T, 2*d_k]
 
-        if self.use_orthogonal:
-            I = torch.eye(self.A.shape[0], device=self.A.device)
+        if self.use_bottleneck:
+            # Compress -> expand: forces distillation of essential information
+            compressed = self.proj_down(gated)  # [B, T, d_neck]
+            merged = self.proj_up(compressed)  # [B, T, d_out]
+        elif self.use_orthogonal:
+            eye = torch.eye(self.A.shape[0], device=self.A.device)
             A_skew = self.A - self.A.T  # enforce skew-symmetry
-            P_orth = torch.linalg.solve(I + A_skew, I - A_skew) @ self.Pi
-            return F.linear(gated, P_orth)
+            P_orth = torch.linalg.solve(eye + A_skew, eye - A_skew) @ self.Pi
+            merged = F.linear(gated, P_orth)
         else:
-            return self.projection(gated)
+            merged = self.projection(gated)
+
+        # Residual: skip = mean of streams (projected if dims differ)
+        if self.residual:
+            if self.skip_proj is not None:
+                skip = (self.skip_proj(h_s) + self.skip_proj(h_s_prime)) / 2
+            else:
+                skip = (h_s + h_s_prime) / 2
+            merged = skip + merged
+
+        return merged
 
     def get_gate_values(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
         """Compute gate values for diagnostics (without full forward pass)."""
         z = torch.cat([h_s, h_s_prime], dim=-1)
-        return torch.sigmoid(self.gate(z))
+        return self._compute_gate(z)
+
+
+class GeometricMerge(nn.Module):
+    """Geometric mean merge: multiplicative feature conjunction.
+
+    Instead of concat→gate→project, independently projects each stream
+    then combines via signed geometric mean: sign(a*b) * sqrt(|a*b|).
+    Features must be present in BOTH streams to survive.
+    """
+
+    def __init__(self, d_in: int, d_out: int):
+        super().__init__()
+        self.proj_a = nn.Linear(d_in, d_out, bias=False)
+        self.proj_b = nn.Linear(d_in, d_out, bias=False)
+        self.scale = nn.Parameter(torch.ones(d_out))
+
+    def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
+        a = self.proj_a(h_s)  # [B, T, d_out]
+        b = self.proj_b(h_s_prime)  # [B, T, d_out]
+        product = a * b
+        # Signed geometric mean: preserves sign, takes sqrt of magnitude
+        merged = torch.sign(product) * torch.sqrt(torch.abs(product) + 1e-8)
+        return merged * self.scale
+
+
+def _build_hadamard(n: int) -> torch.Tensor:
+    """Build n×n Hadamard matrix via Sylvester construction.
+
+    Requires n to be a power of 2.
+    """
+    assert n > 0 and (n & (n - 1)) == 0, f"n must be power of 2, got {n}"
+    H = torch.ones(1, 1)
+    while H.shape[0] < n:
+        H = torch.cat(
+            [
+                torch.cat([H, H], dim=1),
+                torch.cat([H, -H], dim=1),
+            ],
+            dim=0,
+        )
+    return H / math.sqrt(n)  # normalize to orthogonal
+
+
+class HadamardMerge(nn.Module):
+    """Hadamard merge: fixed orthogonal mixing + learned diagonal scaling.
+
+    Concatenates streams, applies a fixed Hadamard rotation (maximally mixes
+    all dimensions), then a learned diagonal scale, then truncates to d_out.
+    ~99% fewer params than gated merge (only d_out scalars vs full projection).
+    """
+
+    def __init__(self, d_in: int, d_out: int):
+        super().__init__()
+        concat_dim = 2 * d_in
+        # Pad to next power of 2 for Hadamard
+        self.pad_dim = 1 << (concat_dim - 1).bit_length()
+        self.register_buffer("H", _build_hadamard(self.pad_dim))
+        self.scale = nn.Parameter(torch.ones(d_out) * 0.1)
+        self.d_out = d_out
+        self.concat_dim = concat_dim
+
+    def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
+        z = torch.cat([h_s, h_s_prime], dim=-1)  # [B, T, 2*d_in]
+        # Pad if needed
+        if self.concat_dim < self.pad_dim:
+            z = F.pad(z, (0, self.pad_dim - self.concat_dim))
+        # Fixed orthogonal rotation
+        z = F.linear(z, self.H)  # [B, T, pad_dim]
+        # Truncate + scale
+        return z[..., : self.d_out] * self.scale  # [B, T, d_out]
+
+
+class CompetitiveMerge(nn.Module):
+    """Competitive merge: streams compete, winner routes forward.
+
+    Each stream is independently projected to d_out, then a learned
+    scorer picks the winner per-token. Uses straight-through estimator
+    for gradients so both streams learn.
+    """
+
+    def __init__(self, d_in: int, d_out: int):
+        super().__init__()
+        self.proj_a = nn.Linear(d_in, d_out, bias=False)
+        self.proj_b = nn.Linear(d_in, d_out, bias=False)
+        # Scorer: computes advantage of stream a over b
+        self.scorer = nn.Linear(2 * d_in, 1)
+
+    def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
+        a = self.proj_a(h_s)  # [B, T, d_out]
+        b = self.proj_b(h_s_prime)  # [B, T, d_out]
+
+        # Score which stream wins
+        z = torch.cat([h_s, h_s_prime], dim=-1)  # [B, T, 2*d_in]
+        score = torch.sigmoid(self.scorer(z))  # [B, T, 1]
+
+        # Hard routing with straight-through gradient
+        hard_choice = (score > 0.5).float()
+        choice = hard_choice + score - score.detach()  # STE
+
+        return choice * a + (1 - choice) * b
 
 
 class CrossStreamAttention(nn.Module):
@@ -138,7 +302,7 @@ class CrossStreamAttention(nn.Module):
 
 
 class MergeLayer(nn.Module):
-    """Complete merge: optional cross-attention + gated projection."""
+    """Complete merge: optional cross-attention + configurable merge algorithm."""
 
     def __init__(
         self,
@@ -148,18 +312,43 @@ class MergeLayer(nn.Module):
         gate_bias_init: float = 1.0,
         use_cross_stream_attention: bool = False,
         use_orthogonal_merge: bool = False,
+        token_conditional: bool = False,
+        residual: bool = False,
+        bottleneck_ratio: float = 0.0,
+        merge_type: str = "gated",
+        noise_std: float = 0.0,
     ):
         super().__init__()
+        self.noise_std = noise_std
+
         self.cross_attn = (
-            CrossStreamAttention(d_in, num_heads)
-            if use_cross_stream_attention
-            else None
+            CrossStreamAttention(d_in, num_heads) if use_cross_stream_attention else None
         )
-        self.merge = GatedMerge(d_in, d_out, gate_bias_init, use_orthogonal_merge)
+
+        if merge_type == "geometric":
+            self.merge = GeometricMerge(d_in, d_out)
+        elif merge_type == "hadamard":
+            self.merge = HadamardMerge(d_in, d_out)
+        elif merge_type == "competitive":
+            self.merge = CompetitiveMerge(d_in, d_out)
+        else:
+            self.merge = GatedMerge(
+                d_in,
+                d_out,
+                gate_bias_init,
+                use_orthogonal_merge,
+                token_conditional,
+                residual,
+                bottleneck_ratio,
+            )
 
     def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
         """Merge two streams with optional cross-attention first."""
         if self.cross_attn is not None:
             h_s = self.cross_attn(h_s, h_s_prime)
             h_s_prime = self.cross_attn(h_s_prime, h_s)
-        return self.merge(h_s, h_s_prime)
+        merged = self.merge(h_s, h_s_prime)
+        # Noise injection during training (variational bottleneck)
+        if self.training and self.noise_std > 0:
+            merged = merged + torch.randn_like(merged) * self.noise_std
+        return merged

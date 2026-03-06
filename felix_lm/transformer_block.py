@@ -53,6 +53,10 @@ class TransformerBlock(nn.Module):
     Equations 10-11:
         h_tilde = h + Attn(LN(h))
         h_next  = h_tilde + FFN(LN(h_tilde))
+
+    Supports asymmetric variants:
+        attention_type="none" -> FFN-only block (no attention)
+        ffn_mult=0            -> Attention-only block (no FFN)
     """
 
     def __init__(
@@ -65,14 +69,20 @@ class TransformerBlock(nn.Module):
         dropout: float = 0.0,
     ):
         super().__init__()
-        self.norm1 = RMSNorm(dim)
-        self.attn = build_attention(attention_type, dim, num_heads, window_size, dropout)
-        self.norm2 = RMSNorm(dim)
-        self.ffn = FeedForward(dim, ffn_mult, dropout)
+        self.has_attn = attention_type != "none"
+        self.has_ffn = ffn_mult > 0
 
-    def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), cos, sin)
-        x = x + self.ffn(self.norm2(x))
+        if self.has_attn:
+            self.norm1 = RMSNorm(dim)
+            self.attn = build_attention(attention_type, dim, num_heads, window_size, dropout)
+
+        if self.has_ffn:
+            self.norm2 = RMSNorm(dim)
+            self.ffn = FeedForward(dim, ffn_mult, dropout)
+
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        if self.has_attn:
+            x = x + self.attn(self.norm1(x), cos, sin)
+        if self.has_ffn:
+            x = x + self.ffn(self.norm2(x))
         return x

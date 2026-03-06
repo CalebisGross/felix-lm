@@ -12,6 +12,15 @@ from typing import Literal
 
 
 @dataclass
+class StreamBlockConfig:
+    """Per-stream block architecture override for asymmetric stages."""
+
+    attention_type: Literal["linear", "sliding_window", "full_causal", "none"]
+    window_size: int = 64
+    ffn_mult: int = 4  # 0 means no FFN
+
+
+@dataclass
 class StageConfig:
     """Configuration for a single processing stage."""
 
@@ -22,6 +31,8 @@ class StageConfig:
     attention_type: Literal["linear", "sliding_window", "full_causal"]
     window_size: int = 64
     ffn_mult: int = 4
+    # Per-stream overrides (if set, each stream gets a different block architecture)
+    stream_overrides: list[StreamBlockConfig] | None = None
 
     @property
     def head_dim(self) -> int:
@@ -64,7 +75,25 @@ class FelixConfig:
     # Training
     tie_embeddings: bool = True
     dropout: float = 0.1
+    stream_dropout: float = 0.0  # probability of dropping entire streams before merge
     weight_sharing: Literal["shared", "independent"] = "independent"
+
+    # Merge architecture
+    token_conditional_gating: bool = False  # gate conditioned on content, not static
+    residual_merge: bool = False  # add skip connection across merge
+    merge_bottleneck_ratio: float = 0.0  # >0 enables bottleneck merge (e.g., 0.25 = d_out/4)
+    merge_type: Literal["gated", "geometric", "hadamard", "competitive"] = (
+        "gated"  # merge algorithm
+    )
+    merge_noise_std: float = 0.0  # >0 injects Gaussian noise at merge during training
+
+    # Stream diversity
+    stream_divergence_weight: float = 0.0  # >0 adds contrastive stream divergence loss
+    stream_permute: bool = False  # randomly shuffle merge pairings each batch
+
+    # Freeze schedule
+    freeze_stream_init_steps: int = 0  # freeze stream projections for N steps
+    progressive_unfreeze: bool = False  # unfreeze stages back-to-front
 
     @property
     def num_stages(self) -> int:
@@ -344,8 +373,113 @@ def make_m2_nosup_config() -> FelixConfig:
     )
 
 
+def make_m2_2stream_config() -> FelixConfig:
+    """2-stream variant (2→1 instead of 4→2→1). Wider streams, single merge."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=6,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=7,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=1,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_8stream_config() -> FelixConfig:
+    """8-stream variant (8→4→2→1). Narrower streams, more merges."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=8,
+                dim=32,
+                num_layers=3,
+                num_heads=2,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=3,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=3,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=3,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_nosup_gate0_config() -> FelixConfig:
+    """M2-nosup with merge gate bias init = 0.0 (balanced gates at 0.5)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        merge_gate_bias_init=0.0,
+        tie_embeddings=True,
+    )
+
+
 def make_m2_best_config() -> FelixConfig:
-    """M2-BEST: Full causal + no deep supervision (combines best ablation flags)."""
+    """M2 with full causal attention + no deep supervision (best of both ablations)."""
     return FelixConfig(
         vocab_size=50257,
         d_embed=128,
@@ -363,6 +497,560 @@ def make_m2_best_config() -> FelixConfig:
                 num_layers=4,
                 num_heads=4,
                 attention_type="full_causal",
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_nosup_backloaded_config() -> FelixConfig:
+    """M2-nosup with backloaded layer distribution (2/4/7 instead of 4/4/5).
+
+    Tests whether giving more depth to the final merged stage improves PPL.
+    Same total layers (13), same params, just redistributed.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=2,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=7,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_streamdrop_config() -> FelixConfig:
+    """M2-nosup + stream dropout (p=0.15). Forces stream independence."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        stream_dropout=0.15,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_tcg_config() -> FelixConfig:
+    """M2-nosup + token-conditional gating. Data-dependent merge decisions."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        token_conditional_gating=True,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_crossattn_config() -> FelixConfig:
+    """M2-nosup + cross-stream attention at merge points.
+
+    Before merging, each stream attends to the other. This lets streams
+    coordinate what they contribute before fusion, rather than merging
+    blindly independent representations.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        use_cross_stream_attention=True,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_shared_deep_config() -> FelixConfig:
+    """M2-nosup with shared Stage 0 weights + deeper Stage 2.
+
+    Streams share transformer layers in Stage 0 (diversity from init only).
+    Saved params redistributed to Stage 2 (5→10 layers), giving more
+    sequential depth at full width. ~11M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=10,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        weight_sharing="shared",
+        tie_embeddings=True,
+    )
+
+
+def make_m2_residual_config() -> FelixConfig:
+    """M2-nosup + residual skip connections across merges.
+
+    Adds a skip path so merge output = mean(streams) + gated_projection.
+    Information is preserved even if gate/projection underperforms.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        residual_merge=True,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_asymmetric_config() -> FelixConfig:
+    """M2-nosup with structurally asymmetric streams in Stage 0.
+
+    Each stream has a fundamentally different transformer block:
+      Stream 0: Attention-only (no FFN) — pure relational/positional processing
+      Stream 1: FFN-only (no attention) — pure token-level feature extraction
+      Stream 2: Wide sliding window (w=256) — broad context patterns
+      Stream 3: Tiny sliding window (w=8) — hyperlocal n-gram patterns
+
+    Streams literally cannot learn the same function. The merge must
+    synthesize fundamentally different representational views.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",  # default (overridden per-stream)
+                stream_overrides=[
+                    StreamBlockConfig(attention_type="full_causal", ffn_mult=0),  # attn-only
+                    StreamBlockConfig(attention_type="none", ffn_mult=4),  # FFN-only
+                    StreamBlockConfig(
+                        attention_type="sliding_window", window_size=256, ffn_mult=4
+                    ),  # wide
+                    StreamBlockConfig(
+                        attention_type="sliding_window", window_size=8, ffn_mult=4
+                    ),  # narrow
+                ],
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_bottleneck_config() -> FelixConfig:
+    """M2-nosup with bottleneck merge (information compression at merge points).
+
+    Instead of 2*d_in -> d_out, the merge goes 2*d_in -> d_out/4 -> d_out.
+    Forces the merge to distill the *essence* of what both streams agree on,
+    rather than preserving everything. Radical information compression.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        merge_bottleneck_ratio=0.25,
+        tie_embeddings=True,
+    )
+
+
+# --- MI300X Batch Experiment Configs ---
+
+
+def _m2_nosup_base(**overrides) -> FelixConfig:
+    """Helper: M2-nosup base config with overrides."""
+    kwargs = dict(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+    kwargs.update(overrides)
+    return FelixConfig(**kwargs)
+
+
+def make_m2_geometric_config() -> FelixConfig:
+    """M2-nosup with geometric mean merge (multiplicative feature conjunction)."""
+    return _m2_nosup_base(merge_type="geometric")
+
+
+def make_m2_hadamard_config() -> FelixConfig:
+    """M2-nosup with Hadamard merge (fixed orthogonal rotation + learned scaling)."""
+    return _m2_nosup_base(merge_type="hadamard")
+
+
+def make_m2_antimerge_config() -> FelixConfig:
+    """M2-nosup with competitive merge (streams compete, winner routes forward)."""
+    return _m2_nosup_base(merge_type="competitive")
+
+
+def make_m2_noise_merge_config() -> FelixConfig:
+    """M2-nosup with Gaussian noise injection at merge during training."""
+    return _m2_nosup_base(merge_noise_std=0.1)
+
+
+def make_m2_diverge_low_config() -> FelixConfig:
+    """M2-nosup + contrastive stream divergence loss (weight=0.01)."""
+    return _m2_nosup_base(stream_divergence_weight=0.01)
+
+
+def make_m2_diverge_mid_config() -> FelixConfig:
+    """M2-nosup + contrastive stream divergence loss (weight=0.1)."""
+    return _m2_nosup_base(stream_divergence_weight=0.1)
+
+
+def make_m2_diverge_high_config() -> FelixConfig:
+    """M2-nosup + contrastive stream divergence loss (weight=0.5)."""
+    return _m2_nosup_base(stream_divergence_weight=0.5)
+
+
+def make_m2_frozen_init_config() -> FelixConfig:
+    """M2-nosup with stream init projections frozen for first 7000 steps."""
+    return _m2_nosup_base(freeze_stream_init_steps=7000)
+
+
+def make_m2_bottleneck_half_config() -> FelixConfig:
+    """M2-nosup with moderate bottleneck merge (ratio=0.5)."""
+    return _m2_nosup_base(merge_bottleneck_ratio=0.5)
+
+
+def make_m2_asymmetric_bottleneck_config() -> FelixConfig:
+    """Asymmetric streams + bottleneck merge (combining two novel approaches)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+                stream_overrides=[
+                    StreamBlockConfig(attention_type="full_causal", ffn_mult=0),
+                    StreamBlockConfig(attention_type="none", ffn_mult=4),
+                    StreamBlockConfig(attention_type="sliding_window", window_size=256, ffn_mult=4),
+                    StreamBlockConfig(attention_type="sliding_window", window_size=8, ffn_mult=4),
+                ],
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        merge_bottleneck_ratio=0.25,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_asymmetric_diverge_config() -> FelixConfig:
+    """Asymmetric streams + divergence loss (0.1)."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+                stream_overrides=[
+                    StreamBlockConfig(attention_type="full_causal", ffn_mult=0),
+                    StreamBlockConfig(attention_type="none", ffn_mult=4),
+                    StreamBlockConfig(attention_type="sliding_window", window_size=256, ffn_mult=4),
+                    StreamBlockConfig(attention_type="sliding_window", window_size=8, ffn_mult=4),
+                ],
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        stream_divergence_weight=0.1,
+        tie_embeddings=True,
+    )
+
+
+def make_m2_geometric_diverge_config() -> FelixConfig:
+    """Geometric merge + divergence loss (0.1)."""
+    return _m2_nosup_base(merge_type="geometric", stream_divergence_weight=0.1)
+
+
+def make_m2_progressive_unfreeze_config() -> FelixConfig:
+    """M2-nosup with progressive unfreezing (Stage 2 first, then 1, then 0)."""
+    return _m2_nosup_base(progressive_unfreeze=True)
+
+
+def make_m2_stream_permute_config() -> FelixConfig:
+    """M2-nosup with random stream permutation at merge time."""
+    return _m2_nosup_base(stream_permute=True)
+
+
+def make_m2_asymmetric_v2_config() -> FelixConfig:
+    """Asymmetric v2: linear attn + full causal + FFN-only + attn-only."""
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+                stream_overrides=[
+                    StreamBlockConfig(attention_type="linear", ffn_mult=4),
+                    StreamBlockConfig(attention_type="full_causal", ffn_mult=4),
+                    StreamBlockConfig(attention_type="none", ffn_mult=4),
+                    StreamBlockConfig(attention_type="full_causal", ffn_mult=0),
+                ],
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
             ),
             StageConfig(
                 num_streams=1,

@@ -18,10 +18,36 @@ from tqdm import tqdm
 from felix_lm.config import (
     FelixConfig,
     make_m0_config,
+    make_m2_2stream_config,
+    make_m2_8stream_config,
+    make_m2_antimerge_config,
+    make_m2_asymmetric_bottleneck_config,
+    make_m2_asymmetric_config,
+    make_m2_asymmetric_diverge_config,
+    make_m2_asymmetric_v2_config,
     make_m2_best_config,
+    make_m2_bottleneck_config,
+    make_m2_bottleneck_half_config,
     make_m2_config,
+    make_m2_crossattn_config,
+    make_m2_diverge_high_config,
+    make_m2_diverge_low_config,
+    make_m2_diverge_mid_config,
+    make_m2_frozen_init_config,
     make_m2_fullcausal_config,
+    make_m2_geometric_config,
+    make_m2_geometric_diverge_config,
+    make_m2_hadamard_config,
+    make_m2_noise_merge_config,
+    make_m2_nosup_backloaded_config,
     make_m2_nosup_config,
+    make_m2_nosup_gate0_config,
+    make_m2_progressive_unfreeze_config,
+    make_m2_residual_config,
+    make_m2_shared_deep_config,
+    make_m2_stream_permute_config,
+    make_m2_streamdrop_config,
+    make_m2_tcg_config,
 )
 from felix_lm.model import FelixLM
 from felix_lm.utils import count_parameters
@@ -163,6 +189,28 @@ def train(config: FelixConfig, args):
             },
         )
 
+    # Freeze schedule
+    frozen_params = []
+    if config.freeze_stream_init_steps > 0:
+        for name, param in model.named_parameters():
+            if "embedding.stream_projections" in name:
+                param.requires_grad = False
+                frozen_params.append((name, param))
+        print(
+            f"  Frozen {len(frozen_params)} stream init params for "
+            f"{config.freeze_stream_init_steps} steps"
+        )
+
+    if config.progressive_unfreeze:
+        # Freeze all stages except the last one
+        for k in range(config.num_stages - 1):
+            for param in model.stages[k].parameters():
+                param.requires_grad = False
+            if k < len(model.merges):
+                for param in model.merges[k].parameters():
+                    param.requires_grad = False
+        print(f"  Progressive unfreeze: only Stage {config.num_stages - 1} trainable initially")
+
     # Training loop
     global_step = 0
     best_val_ppl = float("inf")
@@ -217,6 +265,29 @@ def train(config: FelixConfig, args):
                 )
                 accum_loss = 0.0
                 global_step += 1
+
+                # Unfreeze stream init projections after N steps
+                if (
+                    config.freeze_stream_init_steps > 0
+                    and global_step == config.freeze_stream_init_steps
+                ):
+                    for name, param in frozen_params:
+                        param.requires_grad = True
+                    print(f"\n  Unfroze stream init params at step {global_step}")
+
+                # Progressive unfreeze: back-to-front
+                if config.progressive_unfreeze:
+                    unfreeze_interval = max_steps // config.num_stages
+                    for k in range(config.num_stages - 1):
+                        unfreeze_at = max_steps - (k + 1) * unfreeze_interval
+                        if global_step == unfreeze_at:
+                            stage_idx = config.num_stages - 2 - k
+                            for param in model.stages[stage_idx].parameters():
+                                param.requires_grad = True
+                            if stage_idx < len(model.merges):
+                                for param in model.merges[stage_idx].parameters():
+                                    param.requires_grad = True
+                            print(f"\n  Unfroze Stage {stage_idx} at step {global_step}")
 
                 if args.use_wandb and global_step % args.log_interval == 0:
                     log_dict = {
@@ -308,7 +379,39 @@ def main():
     parser.add_argument(
         "--config",
         default="m2",
-        choices=["m0", "m2", "m2_fullcausal", "m2_nosup", "m2_best"],
+        choices=[
+            "m0",
+            "m2",
+            "m2_2stream",
+            "m2_8stream",
+            "m2_antimerge",
+            "m2_asymmetric",
+            "m2_asymmetric_bottleneck",
+            "m2_asymmetric_diverge",
+            "m2_asymmetric_v2",
+            "m2_best",
+            "m2_bottleneck",
+            "m2_bottleneck_half",
+            "m2_crossattn",
+            "m2_diverge_high",
+            "m2_diverge_low",
+            "m2_diverge_mid",
+            "m2_frozen_init",
+            "m2_fullcausal",
+            "m2_geometric",
+            "m2_geometric_diverge",
+            "m2_hadamard",
+            "m2_noise_merge",
+            "m2_nosup",
+            "m2_nosup_backloaded",
+            "m2_nosup_gate0",
+            "m2_progressive_unfreeze",
+            "m2_residual",
+            "m2_shared_deep",
+            "m2_stream_permute",
+            "m2_streamdrop",
+            "m2_tcg",
+        ],
         help="Model config",
     )
     parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
@@ -342,11 +445,37 @@ def main():
         args.checkpoint_dir = f"./checkpoints/{args.config}"
 
     configs = {
-        "m2": make_m2_config,
         "m0": make_m0_config,
-        "m2_fullcausal": make_m2_fullcausal_config,
-        "m2_nosup": make_m2_nosup_config,
+        "m2": make_m2_config,
+        "m2_2stream": make_m2_2stream_config,
+        "m2_8stream": make_m2_8stream_config,
+        "m2_antimerge": make_m2_antimerge_config,
+        "m2_asymmetric": make_m2_asymmetric_config,
+        "m2_asymmetric_bottleneck": make_m2_asymmetric_bottleneck_config,
+        "m2_asymmetric_diverge": make_m2_asymmetric_diverge_config,
+        "m2_asymmetric_v2": make_m2_asymmetric_v2_config,
         "m2_best": make_m2_best_config,
+        "m2_bottleneck": make_m2_bottleneck_config,
+        "m2_bottleneck_half": make_m2_bottleneck_half_config,
+        "m2_crossattn": make_m2_crossattn_config,
+        "m2_diverge_high": make_m2_diverge_high_config,
+        "m2_diverge_low": make_m2_diverge_low_config,
+        "m2_diverge_mid": make_m2_diverge_mid_config,
+        "m2_frozen_init": make_m2_frozen_init_config,
+        "m2_fullcausal": make_m2_fullcausal_config,
+        "m2_geometric": make_m2_geometric_config,
+        "m2_geometric_diverge": make_m2_geometric_diverge_config,
+        "m2_hadamard": make_m2_hadamard_config,
+        "m2_noise_merge": make_m2_noise_merge_config,
+        "m2_nosup": make_m2_nosup_config,
+        "m2_nosup_backloaded": make_m2_nosup_backloaded_config,
+        "m2_nosup_gate0": make_m2_nosup_gate0_config,
+        "m2_progressive_unfreeze": make_m2_progressive_unfreeze_config,
+        "m2_residual": make_m2_residual_config,
+        "m2_shared_deep": make_m2_shared_deep_config,
+        "m2_stream_permute": make_m2_stream_permute_config,
+        "m2_streamdrop": make_m2_streamdrop_config,
+        "m2_tcg": make_m2_tcg_config,
     }
     config = configs[args.config]()
 

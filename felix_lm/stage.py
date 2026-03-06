@@ -38,7 +38,9 @@ class Stage(nn.Module):
         self.depth_alpha = config.rope_depth_alpha
         self.head_dim = stage_config.head_dim
 
-        if config.weight_sharing == "shared":
+        has_overrides = stage_config.stream_overrides is not None
+
+        if config.weight_sharing == "shared" and not has_overrides:
             # All streams share the same layer parameters
             self.layers = nn.ModuleList(
                 [
@@ -56,24 +58,34 @@ class Stage(nn.Module):
             self.shared = True
         else:
             # Each stream has independent layer parameters
-            self.stream_layers = nn.ModuleList(
-                [
+            # With overrides, each stream gets a structurally different block
+            self.stream_layers = nn.ModuleList()
+            for s in range(stage_config.num_streams):
+                if has_overrides:
+                    override = stage_config.stream_overrides[s]
+                    attn_type = override.attention_type
+                    ffn_mult = override.ffn_mult
+                    window_size = override.window_size
+                else:
+                    attn_type = stage_config.attention_type
+                    ffn_mult = stage_config.ffn_mult
+                    window_size = stage_config.window_size
+
+                self.stream_layers.append(
                     nn.ModuleList(
                         [
                             TransformerBlock(
                                 dim=stage_config.dim,
                                 num_heads=stage_config.num_heads,
-                                attention_type=stage_config.attention_type,
-                                ffn_mult=stage_config.ffn_mult,
-                                window_size=stage_config.window_size,
+                                attention_type=attn_type,
+                                ffn_mult=ffn_mult,
+                                window_size=window_size,
                                 dropout=config.dropout,
                             )
                             for _ in range(stage_config.num_layers)
                         ]
                     )
-                    for _ in range(stage_config.num_streams)
-                ]
-            )
+                )
             self.shared = False
 
     def forward(self, streams: list[torch.Tensor]) -> list[torch.Tensor]:
