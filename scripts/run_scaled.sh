@@ -7,6 +7,9 @@
 # batch=4, grad_accum=16, eff_batch=64, ~7629 opt steps per 1B tokens.
 set -e
 
+# Activate venv so python/torch are available under nohup
+source "$(dirname "$0")/../.venv/bin/activate"
+
 echo "=== Starting scaled experiments $(date) ==="
 
 # 100M experiments (batch=4 confirmed working on MI300X)
