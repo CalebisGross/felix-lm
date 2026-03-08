@@ -64,6 +64,8 @@ class FelixLM(nn.Module):
                     bottleneck_ratio=config.merge_bottleneck_ratio,
                     merge_type=config.merge_type,
                     noise_std=config.merge_noise_std,
+                    integration_depth=config.merge_integration_depth,
+                    dropout=config.dropout,
                 )
             )
 
@@ -79,6 +81,9 @@ class FelixLM(nn.Module):
 
         # 5. Output head (Section 3.6)
         self.output_norm = RMSNorm(config.final_dim)
+        if config.tie_embeddings and config.final_dim != config.d_embed:
+            # Project from final stage dim to embedding dim for weight tying
+            self.output_project = nn.Linear(config.final_dim, config.d_embed, bias=False)
         if not config.tie_embeddings:
             self.output_proj = nn.Linear(config.final_dim, config.vocab_size, bias=False)
 
@@ -153,10 +158,29 @@ class FelixLM(nn.Module):
                     perm = torch.randperm(len(streams))
                     streams = [streams[p] for p in perm]
 
+                # Build RoPE for merge integration layers (at boundary between stages)
+                merge_cos, merge_sin = None, None
+                if self.config.merge_integration_depth > 0:
+                    from felix_lm.rope import build_rope_cache
+
+                    T = streams[0].shape[1]
+                    # Use the global layer index at the merge boundary
+                    merge_layer_idx = sum(s.num_layers for s in self.config.stages[: k + 1])
+                    merge_cos, merge_sin = build_rope_cache(
+                        seq_len=T,
+                        dim=self.config.stages[k + 1].head_dim,
+                        global_layer_idx=merge_layer_idx,
+                        total_layers=self.config.total_layers,
+                        helical_turns=self.config.rope_helical_turns,
+                        base=self.config.rope_base,
+                        depth_alpha=self.config.rope_depth_alpha,
+                        device=streams[0].device,
+                    )
+
                 # Merge pairs: (0,1), (2,3), ...
                 new_streams = []
                 for i in range(0, len(streams), 2):
-                    merged = self.merges[k](streams[i], streams[i + 1])
+                    merged = self.merges[k](streams[i], streams[i + 1], merge_cos, merge_sin)
                     new_streams.append(merged)
 
                 # Exit logits from merged representation
@@ -174,6 +198,8 @@ class FelixLM(nn.Module):
         h_final = self.output_norm(streams[0])  # [B, T, d_{K-1}]
 
         if self.config.tie_embeddings:
+            if hasattr(self, "output_project"):
+                h_final = self.output_project(h_final)  # [B, T, d_embed]
             logits = F.linear(h_final, embed_weight)  # [B, T, V]
         else:
             logits = self.output_proj(h_final)

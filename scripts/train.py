@@ -17,7 +17,14 @@ from tqdm import tqdm
 
 from felix_lm.config import (
     FelixConfig,
+    make_felix_2stage_config,
+    make_felix_embed64_config,
+    make_felix_ffn3_config,
+    make_felix_front643_config,
+    make_felix_merge_integrate_config,
+    make_felix_wide96_config,
     make_m0_config,
+    make_m0_embed64_config,
     make_m2_2stream_config,
     make_m2_8stream_config,
     make_m2_antimerge_config,
@@ -135,8 +142,8 @@ def train(config: FelixConfig, args):
         autocast_ctx = torch.autocast("mps", dtype=torch.float16)
         print("  Mixed precision: fp16 via MPS autocast")
     elif device.type == "cuda":
-        autocast_ctx = torch.autocast("cuda", dtype=torch.float16)
-        print("  Mixed precision: fp16 via CUDA autocast")
+        autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16)
+        print("  Mixed precision: bf16 via CUDA autocast")
     else:
         autocast_ctx = torch.autocast("cpu", enabled=False)
 
@@ -147,12 +154,18 @@ def train(config: FelixConfig, args):
     val_ds = WikiTextDataset("validation", seq_len=args.seq_len, cache_dir=args.data_dir)
 
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=pin_memory,
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=pin_memory,
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
     )
 
     # Optimizer
@@ -266,6 +279,16 @@ def train(config: FelixConfig, args):
                 accum_loss = 0.0
                 global_step += 1
 
+                # Supervision curriculum: turn off supervision after N steps
+                if (
+                    args.supervision_off_after > 0
+                    and global_step == args.supervision_off_after
+                    and model.loss_fn is not None
+                ):
+                    model.loss_fn = None
+                    config.use_deep_supervision = False
+                    print(f"\n  Supervision OFF at step {global_step} (curriculum)")
+
                 # Unfreeze stream init projections after N steps
                 if (
                     config.freeze_stream_init_steps > 0
@@ -298,10 +321,14 @@ def train(config: FelixConfig, args):
                     }
                     if last_result and "per_stage_losses" in last_result:
                         for k, sl in enumerate(last_result["per_stage_losses"]):
-                            log_dict[f"train/stage_{k}_loss"] = sl.item() if hasattr(sl, "item") else sl
+                            log_dict[f"train/stage_{k}_loss"] = (
+                                sl.item() if hasattr(sl, "item") else sl
+                            )
                     if last_result and "stream_agreements" in last_result:
                         for k, ag in enumerate(last_result["stream_agreements"]):
-                            log_dict[f"train/agreement_merge_{k}"] = ag.item() if hasattr(ag, "item") else ag
+                            log_dict[f"train/agreement_merge_{k}"] = (
+                                ag.item() if hasattr(ag, "item") else ag
+                            )
 
                     import wandb
 
@@ -357,8 +384,10 @@ def evaluate(model, dataloader, device) -> float:
     total_tokens = 0
     use_mps = device.type == "mps"
     autocast_ctx = (
-        torch.autocast("mps", dtype=torch.float16) if use_mps
-        else torch.autocast("cuda", dtype=torch.float16) if device.type == "cuda"
+        torch.autocast("mps", dtype=torch.float16)
+        if use_mps
+        else torch.autocast("cuda", dtype=torch.bfloat16)
+        if device.type == "cuda"
         else torch.autocast("cpu", enabled=False)
     )
 
@@ -392,6 +421,13 @@ def main():
             "m2_best",
             "m2_bottleneck",
             "m2_bottleneck_half",
+            "felix_2stage",
+            "felix_embed64",
+            "felix_ffn3",
+            "felix_front643",
+            "felix_merge_integrate",
+            "felix_wide96",
+            "m0_embed64",
             "m2_crossattn",
             "m2_diverge_high",
             "m2_diverge_low",
@@ -436,7 +472,21 @@ def main():
         "--checkpoint-dir", default=None, help="Checkpoint dir (default: ./checkpoints/<config>)"
     )
     parser.add_argument("--no-wandb", action="store_true")
-    parser.add_argument("--compile", action="store_true", help="Use torch.compile (speeds up MPS/CUDA)")
+    parser.add_argument(
+        "--compile", action="store_true", help="Use torch.compile (speeds up MPS/CUDA)"
+    )
+    parser.add_argument(
+        "--supervision-off-after",
+        type=int,
+        default=0,
+        help="Turn off deep supervision after N steps (0=no curriculum)",
+    )
+    parser.add_argument(
+        "--rope-turns",
+        type=int,
+        default=None,
+        help="Override config's rope_helical_turns (for ablation)",
+    )
     args = parser.parse_args()
 
     args.use_wandb = not args.no_wandb
@@ -445,7 +495,14 @@ def main():
         args.checkpoint_dir = f"./checkpoints/{args.config}"
 
     configs = {
+        "felix_2stage": make_felix_2stage_config,
+        "felix_embed64": make_felix_embed64_config,
+        "felix_ffn3": make_felix_ffn3_config,
+        "felix_front643": make_felix_front643_config,
+        "felix_merge_integrate": make_felix_merge_integrate_config,
+        "felix_wide96": make_felix_wide96_config,
         "m0": make_m0_config,
+        "m0_embed64": make_m0_embed64_config,
         "m2": make_m2_config,
         "m2_2stream": make_m2_2stream_config,
         "m2_8stream": make_m2_8stream_config,
@@ -478,6 +535,18 @@ def main():
         "m2_tcg": make_m2_tcg_config,
     }
     config = configs[args.config]()
+
+    # CLI overrides for ablation
+    if args.rope_turns is not None:
+        config.rope_helical_turns = args.rope_turns
+        print(f"  Override: rope_helical_turns = {args.rope_turns}")
+
+    if args.supervision_off_after > 0:
+        # Ensure supervision starts ON for curriculum training
+        if not config.use_deep_supervision:
+            config.use_deep_supervision = True
+            off_after = args.supervision_off_after
+            print(f"  Supervision curriculum: ON for first {off_after} steps, then OFF")
 
     train(config, args)
 

@@ -2,48 +2,53 @@
 
 **Multi-Stream Progressive Merging for Causal Language Modeling**
 
-[Paper (PDF)](docs/felix_lm_design.pdf) &middot; [Experiment Log](docs/experiments.md) &middot; [Research Directions](docs/research_directions.md)
+[Paper (PDF)](docs/felix_lm_design.pdf) · [Experiment Log](docs/experiments.md)
 
 ---
 
-## Abstract
+## What is this?
 
-Standard transformer language models process representations through a uniform stack of identical layers. Felix-LM introduces **Multi-Stream Progressive Merging (MSPM)**: the input is processed by multiple independent computational streams that progressively merge into a single output stream through a sequence of structured convergence operations, tracing a helical funnel trajectory in representation space.
+Felix-LM is a novel transformer architecture where the input is processed by multiple independent streams in parallel, then progressively merged back into a single output. Instead of one big stack of layers, 4 narrow streams each develop their own "take" on the text, and learned gated merges combine them step by step.
 
-The architecture pairs each processing stage with the attention mechanism best suited to its role&mdash;cheap linear attention for broad early exploration, sliding-window attention for local refinement, and full causal attention for the final high-fidelity output&mdash;while gated merge operations between stages learn to selectively combine stream pairs.
+Each stage uses the attention type suited to its job: cheap linear attention for broad early exploration, sliding-window for local refinement, and full causal for the final output. A depth-extended RoPE encodes both token position and network depth, which turns out to be essential for the multi-stage design.
 
 ## Architecture
 
-The model processes input through *K* stages with decreasing stream counts (4 &rarr; 2 &rarr; 1), where each stage pairs independent transformer streams with the attention mechanism suited to its role:
+The model processes input through 3 stages with decreasing stream counts (4 → 2 → 1):
 
-- **Stage 0** (4 streams, dim=64) &mdash; Linear attention for cheap, broad exploration
-- **Stage 1** (2 streams, dim=128) &mdash; Sliding-window attention for local refinement
-- **Stage 2** (1 stream, dim=128) &mdash; Full causal attention for high-fidelity output
+- **Stage 0** (4 streams, dim=64) — Linear attention, stream specialization
+- **Stage 1** (2 streams, dim=128) — Sliding-window attention, post-merge integration
+- **Stage 2** (1 stream, dim=128) — Full causal attention, final refinement
 
-Between stages, **gated merge** operations (learned sigmoid gates + linear projections) selectively combine stream pairs. Additional components include **depth-extended RoPE** encoding both token position and network depth, **deep supervision** loss at merge boundaries, and **cross-stream agreement** as a natural confidence signal for early exit.
+Between stages, **gated merge** operations (learned sigmoid gates + linear projections) combine stream pairs. The streams specialize on their own without any explicit encouragement — pairwise cosine similarity between stream weights converges to ~0.00.
 
 See the [design document](docs/felix_lm_design.pdf) for the full mathematical framework.
 
 ## Results
 
-All experiments use ~11M parameters, WikiText-103, sequence length 512, and effective batch size 32.
+42 experiments at ~11M params on WikiText-103 (seq_len=512, effective batch size 32).
 
-| Model | Config | Attention | Deep Supervision | Test PPL | Stage 2 PPL |
-| :----- | :----- | :-------- | :--------------- | :------: | :---------: |
-| M0 (baseline) | `m0` | Full causal | N/A | 115.66 | &mdash; |
-| M2 MSPM-Hetero | `m2` | Linear &rarr; Sliding &rarr; Causal | ON | 150.14 | 121.81 |
-| M2 Full-Causal | `m2_fullcausal` | Full causal (all stages) | ON | 129.09 | **107.49** |
-| M2 No-Supervision | `m2_nosup` | Linear &rarr; Sliding &rarr; Causal | OFF | 118.41 | &mdash; |
+| Model | Config | LR | Epochs | Test PPL |
+| :---- | :----- | :- | :----- | :------: |
+| **M0 at optimal LR** | `m0` | **6e-4** | **2** | **91.81** |
+| M0 (baseline) | `m0` | 3e-4 | 3 | 115.66 |
+| MSPM at optimal LR | `m2_nosup` | 6e-4 | 2 | 101.39 |
+| MSPM no supervision | `m2_nosup` | 3e-4 | 3 | 118.41 |
+| MSPM (original) | `m2` | 3e-4 | 3 | 150.14 |
 
-**The multi-stream merging mechanism works.** When attention type is controlled for (M2 Full-Causal), the final-stage output at 107.49 PPL beats the parameter-matched single-stream baseline at 115.66&mdash;a 7% improvement from the multi-stream inductive bias alone. Removing deep supervision alone closes M2 to within 2.4% of the baseline, even with cheap linear attention in Stage 0.
+The biggest finding from 42 experiments: both architectures were undertrained at the default LR of 3e-4. At 6e-4, M0 drops from 115.66 to 91.81 and MSPM from 118.41 to 101.39. The single-stream baseline benefits more from the higher LR, widening the gap from 2.4% to 10.4%. At 11M scale, the "multi-stream tax" (embedding dominates the budget, fewer effective layers) outweighs the richer merged representations. The open question is whether this changes at larger scale where the tax shrinks.
 
-### Key findings
+### Key findings from 42 experiments
 
-- **Stream specialization is real.** Pairwise cosine similarity between stream Q-projection weights converges to ~0.00, indicating fully orthogonal learned representations across all stream pairs.
-- **Gates learn meaningful selectivity.** Gate biases drift from initialization at 1.0 to ~0.65 after training (~35% selectivity), with no stream dominance&mdash;both halves gated equally.
-- **Merge projections use near-full rank** (97/128 and 106/128), confirming that the gated merge is a genuine information-combining operation, not a bottleneck.
-- **Deep supervision hurts at small scale.** Removing it is the single largest improvement (+32 PPL over M2), closing to within 2.75 PPL of the baseline&mdash;even with linear attention in Stage 0. Forcing early stages to predict tokens likely conflicts with learning good intermediate representations for merging.
-- **Linear attention is a secondary bottleneck.** Replacing heterogeneous attention with full causal everywhere closed ~60% of the gap to baseline, isolating the attention type as a contributor to M2's underperformance.
+- **No deep supervision.** Removing auxiliary losses at merge boundaries was the single biggest improvement (+32 PPL). The model learns better when it only optimizes the final output.
+- **The gated merge is the right merge.** Four alternative algorithms (geometric, Hadamard, competitive, noise-injected) all made things worse. Merges must be additive — the streams learn complementary representations that need to be combined, not selected between.
+- **Streams specialize on their own.** Identical architecture per stream, but they learn fully orthogonal representations. Imposed structural diversity (different stream architectures) hurts. Emergent specialization beats designed specialization.
+- **Helical RoPE is essential.** Standard RoPE (no depth component) is catastrophically worse for MSPM. The multi-stage architecture needs positional encoding that distinguishes network depth, not just token position.
+- **4 streams, balanced 4/4/5 layer split.** Both fewer and more streams hurt. Every layer distribution we tested (frontloaded, backloaded, minimal middle stage) was worse than the balanced split.
+- **Nothing stochastic at the merge boundary.** Stream dropout, random merge pairings, and noise injection all hurt. The merge learns a precise mapping that requires consistent inputs.
+- **Both architectures want a higher learning rate.** The default 3e-4 was suboptimal for both. At 6e-4, M0 improves by 20.6% and MSPM by 14.4%. M0 benefits more, suggesting simpler gradient dynamics exploit higher LR more efficiently.
+
+Full experiment log with methodology and analysis: [docs/experiments.md](docs/experiments.md)
 
 ## Getting Started
 
@@ -67,21 +72,22 @@ pytest tests/ -q
 ### Training
 
 ```bash
-# Primary architecture (MSPM with heterogeneous attention)
-python scripts/train.py --config m2 --batch-size 8 --grad-accum 4 --device cuda
+# Best overall config (M0 at optimal LR)
+python scripts/train.py --config m0 --batch-size 8 --grad-accum 4 --device cuda --lr 6e-4
 
-# Baseline transformer
-python scripts/train.py --config m0 --batch-size 8 --grad-accum 4 --device cuda
+# Best MSPM config
+python scripts/train.py --config m2_nosup --batch-size 8 --grad-accum 4 --device cuda --lr 6e-4
 
-# Ablations
-python scripts/train.py --config m2_fullcausal --batch-size 8 --grad-accum 4 --device cuda
-python scripts/train.py --config m2_nosup --batch-size 8 --grad-accum 4 --device cuda
+# Ablation flags
+python scripts/train.py --config m2_nosup --rope-turns 0      # test standard RoPE
+python scripts/train.py --config m2_nosup --lr 1e-3            # test different LR
+python scripts/train.py --config m2_nosup --supervision-off-after 2000  # supervision curriculum
 ```
 
 ### Evaluation
 
 ```bash
-python scripts/evaluate.py --checkpoint checkpoints/m2_fullcausal/best.pt --split test --device cuda --batch-size 8
+python scripts/evaluate.py --checkpoint checkpoints/m2_nosup/best.pt --split test --device cuda --batch-size 8
 ```
 
 Training logs are tracked with [Weights & Biases](https://wandb.ai) under the `felix-lm` project.
@@ -95,7 +101,7 @@ felix_lm/
 ├── attention.py          # LinearAttention, SlidingWindowAttention, FullCausalAttention
 ├── merge.py              # GatedMerge, CrossStreamAttention, MergeLayer
 ├── rope.py               # Depth-extended RoPE (position + layer depth encoding)
-├── stage.py              # Processing stage (N streams × L transformer layers)
+├── stage.py              # Processing stage (N streams x L transformer layers)
 ├── transformer_block.py  # Pre-norm transformer block with SwiGLU FFN
 ├── embedding.py          # Token embedding + per-stream learned projections
 ├── exit_heads.py         # Deep supervision loss and cross-stream agreement
@@ -109,8 +115,7 @@ scripts/
 
 docs/
 ├── felix_lm_design.pdf   # Full design document and theoretical foundation
-├── experiments.md         # Detailed experiment log with all results
-└── research_directions.md # Planned experiments and future work
+└── experiments.md         # Detailed experiment log (42 experiments)
 ```
 
 ## Citation

@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from felix_lm.transformer_block import RMSNorm
+from felix_lm.transformer_block import RMSNorm, TransformerBlock
 
 
 class GatedMerge(nn.Module):
@@ -317,6 +317,8 @@ class MergeLayer(nn.Module):
         bottleneck_ratio: float = 0.0,
         merge_type: str = "gated",
         noise_std: float = 0.0,
+        integration_depth: int = 0,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.noise_std = noise_std
@@ -342,8 +344,32 @@ class MergeLayer(nn.Module):
                 bottleneck_ratio,
             )
 
-    def forward(self, h_s: torch.Tensor, h_s_prime: torch.Tensor) -> torch.Tensor:
-        """Merge two streams with optional cross-attention first."""
+        # Post-merge integration layers: dedicated compute to digest merged output
+        if integration_depth > 0:
+            out_heads = max(1, d_out // 32)  # head_dim ~32
+            self.integration = nn.ModuleList(
+                [
+                    TransformerBlock(
+                        dim=d_out,
+                        num_heads=out_heads,
+                        attention_type="full_causal",
+                        ffn_mult=4,
+                        dropout=dropout,
+                    )
+                    for _ in range(integration_depth)
+                ]
+            )
+        else:
+            self.integration = None
+
+    def forward(
+        self,
+        h_s: torch.Tensor,
+        h_s_prime: torch.Tensor,
+        cos: torch.Tensor | None = None,
+        sin: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Merge two streams with optional cross-attention and integration."""
         if self.cross_attn is not None:
             h_s = self.cross_attn(h_s, h_s_prime)
             h_s_prime = self.cross_attn(h_s_prime, h_s)
@@ -351,4 +377,8 @@ class MergeLayer(nn.Module):
         # Noise injection during training (variational bottleneck)
         if self.training and self.noise_std > 0:
             merged = merged + torch.randn_like(merged) * self.noise_std
+        # Post-merge integration
+        if self.integration is not None and cos is not None and sin is not None:
+            for layer in self.integration:
+                merged = layer(merged, cos, sin)
         return merged

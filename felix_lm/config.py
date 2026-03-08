@@ -86,6 +86,7 @@ class FelixConfig:
         "gated"  # merge algorithm
     )
     merge_noise_std: float = 0.0  # >0 injects Gaussian noise at merge during training
+    merge_integration_depth: int = 0  # >0 adds N transformer layers after each merge
 
     # Stream diversity
     stream_divergence_weight: float = 0.0  # >0 adds contrastive stream divergence loss
@@ -668,8 +669,8 @@ def make_m2_shared_deep_config() -> FelixConfig:
     """M2-nosup with shared Stage 0 weights + deeper Stage 2.
 
     Streams share transformer layers in Stage 0 (diversity from init only).
-    Saved params redistributed to Stage 2 (5→10 layers), giving more
-    sequential depth at full width. ~11M params.
+    Saved params redistributed to Stage 2 (5→12 layers), giving more
+    sequential depth at full width. ~11.09M params (matches m2_nosup).
     """
     return FelixConfig(
         vocab_size=50257,
@@ -693,7 +694,7 @@ def make_m2_shared_deep_config() -> FelixConfig:
             StageConfig(
                 num_streams=1,
                 dim=128,
-                num_layers=10,
+                num_layers=12,
                 num_heads=4,
                 attention_type="full_causal",
             ),
@@ -1066,6 +1067,52 @@ def make_m2_asymmetric_v2_config() -> FelixConfig:
     )
 
 
+def make_felix_ffn3_config() -> FelixConfig:
+    """Narrower FFN (mult=3 instead of 4) to trade width for depth.
+
+    Hypothesis: framework-level experiments proved depth > width at 11M.
+    Reducing FFN multiplier from 4 to 3 saves 25% of FFN params per layer,
+    buying 3 extra layers (16 total vs M2's 13). Same balanced split
+    proportions (5/5/6 vs 4/4/5). Tests whether more sequential
+    transformations with narrower FFN outperform fewer wider ones.
+    ~11.11M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=5,
+                num_heads=4,
+                attention_type="linear",
+                ffn_mult=3,
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+                ffn_mult=3,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=6,
+                num_heads=4,
+                attention_type="full_causal",
+                ffn_mult=3,
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
 def make_m0_config() -> FelixConfig:
     """M0 UNIFORM: Standard transformer baseline (~10M params)."""
     return FelixConfig(
@@ -1083,4 +1130,251 @@ def make_m0_config() -> FelixConfig:
         use_deep_supervision=False,
         tie_embeddings=True,
         rope_depth_alpha=0.0,  # standard RoPE for baseline
+    )
+
+
+# ── Foundational assumption experiments (d_embed, LR, RoPE, etc.) ──
+
+
+def make_felix_merge_integrate_config() -> FelixConfig:
+    """MSPM with post-merge integration layers.
+
+    Hypothesis: the gated merge is a single-shot linear projection that
+    may be insufficient to properly integrate two orthogonal stream
+    representations. Adding 1 transformer layer after each merge gives
+    dedicated compute for "digesting" the merged output before it enters
+    the next stage. Same 4/4/5 stages as m2_nosup, plus 2 integration
+    layers (one per merge point). Slightly over budget to isolate the
+    integration effect without confounding by removing stage depth.
+    ~11.35M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=4,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=5,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+        merge_integration_depth=1,
+    )
+
+
+def make_felix_embed64_config() -> FelixConfig:
+    """MSPM with d_embed=64 instead of 128.
+
+    Hypothesis: d_embed=128 wastes 58% of the 11M budget on an embedding
+    matrix that immediately gets projected to dim=64 streams. Halving
+    d_embed to 64 saves 3.2M params, enabling 22 layers (vs M2's 13)
+    at the same total budget. The exit head already handles the dim
+    mismatch (projects Stage 2 dim=128 -> d_embed=64 before tied logits).
+    Tests whether depth from freed embedding params beats richer embeddings.
+    ~10.99M params, 22 layers total.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=64,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=6,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=7,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=9,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_m0_embed64_config() -> FelixConfig:
+    """M0 baseline with d_embed=64. Fair comparison for felix_embed64.
+
+    Same d_embed=64 savings, spent on depth: 30 layers at dim=128.
+    ~11.10M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=64,
+        stages=[
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=30,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        use_deep_supervision=False,
+        tie_embeddings=True,
+        rope_depth_alpha=0.0,
+    )
+
+
+# ── Framework-level experiments (exploring MSPM topology, not M2 tweaks) ──
+
+
+def make_felix_front643_config() -> FelixConfig:
+    """Frontloaded 3-stage: invest depth in Stage 0 for stream specialization.
+
+    Hypothesis: M2's 4/4/5 layer split underinvests in early-stage depth.
+    Frontloading to 6/4/3 gives streams more layers to specialize before
+    their first merge, at the cost of less post-merge refinement.
+    ~11.09M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=6,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=3,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_felix_2stage_config() -> FelixConfig:
+    """Near-2-stage: deep parallel exploration, minimal bridge, deep refinement.
+
+    Hypothesis: the intermediate 2-stream stage in M2 may not add enough
+    value to justify its param cost. This config does 4×64 (7L) for deep
+    stream specialization, a 1-layer bridge at 2×128 (minimal processing),
+    then 8 layers of full-width refinement. Tests whether skipping meaningful
+    intermediate processing hurts or helps.
+    ~11.09M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=64,
+                num_layers=7,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=1,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=8,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=1,
+        use_deep_supervision=False,
+        tie_embeddings=True,
+    )
+
+
+def make_felix_wide96_config() -> FelixConfig:
+    """Wider Stage 0 streams (dim=96 instead of 64).
+
+    Hypothesis: dim=64 streams may be too narrow for meaningful
+    representation learning. Wider streams (96) give each stream 50% more
+    capacity per layer, but the multi-stream tax is higher (4×96 embedding
+    projections + larger merge matrices). Fewer layers compensate for the
+    param increase. Tests the base_dim axis of the framework design space.
+    ~10.55M params.
+    """
+    return FelixConfig(
+        vocab_size=50257,
+        d_embed=128,
+        stages=[
+            StageConfig(
+                num_streams=4,
+                dim=96,
+                num_layers=3,
+                num_heads=4,
+                attention_type="linear",
+            ),
+            StageConfig(
+                num_streams=2,
+                dim=128,
+                num_layers=2,
+                num_heads=4,
+                attention_type="sliding_window",
+                window_size=64,
+            ),
+            StageConfig(
+                num_streams=1,
+                dim=128,
+                num_layers=4,
+                num_heads=4,
+                attention_type="full_causal",
+            ),
+        ],
+        rope_helical_turns=2,
+        use_deep_supervision=False,
+        tie_embeddings=True,
     )
