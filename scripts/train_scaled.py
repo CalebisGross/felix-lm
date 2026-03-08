@@ -297,10 +297,20 @@ def train(config: FelixConfig, args):
 
     steps_per_epoch = tokens_per_epoch // (args.batch_size * args.seq_len * args.grad_accum)
     max_steps = steps_per_epoch * args.epochs
+    opt_steps = max_steps // args.grad_accum
     print(f"\nTraining: {args.epochs} epochs, ~{steps_per_epoch} steps/epoch")
-    print(f"  grad_accum={args.grad_accum}, ~{max_steps} total steps")
+    print(f"  grad_accum={args.grad_accum}, ~{max_steps} total steps, {opt_steps} optimizer steps")
     print(f"  Effective batch size: {args.batch_size * args.grad_accum}")
     print(f"  Tokens per epoch: {tokens_per_epoch:,}")
+    # Auto-scale warmup: default 10% of optimizer steps
+    if args.warmup_steps == 0:
+        args.warmup_steps = max(1, opt_steps // 10)
+    if args.warmup_steps > opt_steps // 2:
+        old = args.warmup_steps
+        args.warmup_steps = max(1, opt_steps // 10)
+        print(f"  Warmup {old} > 50% of opt steps, auto-scaled to {args.warmup_steps}")
+    pct = args.warmup_steps / opt_steps * 100
+    print(f"  Warmup: {args.warmup_steps} optimizer steps ({pct:.0f}%)")
 
     # wandb
     if not args.no_wandb:
@@ -425,7 +435,9 @@ def main():
     parser.add_argument("--seq-len", type=int, default=2048)
     parser.add_argument("--lr", type=float, default=6e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
-    parser.add_argument("--warmup-steps", type=int, default=2000)
+    parser.add_argument(
+        "--warmup-steps", type=int, default=0, help="Warmup optimizer steps (0=auto: 10%% of total)"
+    )
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--tokens-per-epoch", type=int, default=1_000_000_000)
