@@ -6,8 +6,6 @@ Three attention types, reflecting heterogeneous computation by stage:
 - Stage K-1:     FullCausalAttention     O(T²)  — maximum precision
 """
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,9 +32,7 @@ class FullCausalAttention(nn.Module):
         self.out_proj = nn.Linear(dim, dim, bias=False)
         self.dropout = dropout
 
-    def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         B, T, D = x.shape
 
         q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
@@ -45,9 +41,11 @@ class FullCausalAttention(nn.Module):
 
         q, k = apply_rope(q, k, cos, sin)
 
-        out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
-        )
+        # Force math backend — flash/efficient are buggy on MI300X
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+            out = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            )
 
         out = out.transpose(1, 2).contiguous().view(B, T, D)
         return self.out_proj(out)
@@ -86,9 +84,7 @@ class SlidingWindowAttention(nn.Module):
         window = col_idx >= (row_idx - self.window_size + 1)
         return causal & window
 
-    def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         B, T, D = x.shape
 
         q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
@@ -102,9 +98,11 @@ class SlidingWindowAttention(nn.Module):
         # Convert to float mask for SDPA: 0.0 for attend, -inf for mask
         attn_mask = torch.where(mask, 0.0, float("-inf"))
 
-        out = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0.0
-        )
+        # Force math backend — flash/efficient are buggy on MI300X
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+            out = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0.0
+            )
 
         out = out.transpose(1, 2).contiguous().view(B, T, D)
         return self.out_proj(out)
@@ -140,9 +138,7 @@ class LinearAttention(nn.Module):
         """ELU+1 feature map: phi(x) = elu(x) + 1. Always non-negative."""
         return F.elu(x) + 1.0
 
-    def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         B, T, D = x.shape
         H = self.num_heads
         d = self.head_dim
