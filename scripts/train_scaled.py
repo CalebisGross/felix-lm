@@ -269,8 +269,11 @@ def train(config: FelixConfig, args):
     n_params = count_parameters(model)
     print(f"\nModel: {config.num_stages} stages, {config.total_layers} layers, {n_params:,} params")
 
-    # bf16 on CUDA, fp16 on MPS, fp32 on CPU
-    if device.type == "cuda":
+    # Mixed precision
+    if args.dtype == "fp32":
+        autocast_ctx = torch.autocast("cuda", enabled=False)
+        print("  Precision: fp32")
+    elif device.type == "cuda":
         autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16)
         print("  Mixed precision: bf16")
     elif device.type == "mps":
@@ -442,6 +445,7 @@ def main():
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--tokens-per-epoch", type=int, default=1_000_000_000)
     parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp32"])
     args = parser.parse_args()
 
     config = CONFIGS[args.config]()
