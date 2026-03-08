@@ -200,7 +200,8 @@ class FelixLM(nn.Module):
         if self.config.tie_embeddings:
             if hasattr(self, "output_project"):
                 h_final = self.output_project(h_final)  # [B, T, d_embed]
-            logits = F.linear(h_final, embed_weight)  # [B, T, V]
+            # Scale logits by 1/sqrt(d_embed) to prevent peaked softmax at init
+            logits = F.linear(h_final, embed_weight) * (embed_weight.shape[1] ** -0.5)
         else:
             logits = self.output_proj(h_final)
         all_logits.append(logits)

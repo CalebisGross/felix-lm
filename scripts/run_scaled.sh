@@ -5,25 +5,23 @@ set -e
 
 echo "=== Starting scaled experiments $(date) ==="
 
-# LR 1e-4 is stable at 100M+ (6e-4 and 3e-4 both NaN)
-
 # 100M experiments
 echo "--- m0_100m ---"
 python scripts/train_scaled.py --config m0_100m --device cuda \
-    --batch-size 64 --grad-accum 4 --lr 1e-4
+    --batch-size 64 --grad-accum 4 --lr 6e-4
 
 echo "--- felix_100m ---"
 python scripts/train_scaled.py --config felix_100m --device cuda \
-    --batch-size 16 --grad-accum 16 --lr 1e-4
+    --batch-size 16 --grad-accum 16 --lr 6e-4
 
 # 500M experiments
 echo "--- m0_500m ---"
 python scripts/train_scaled.py --config m0_500m --device cuda \
-    --batch-size 32 --grad-accum 8 --lr 1e-4
+    --batch-size 32 --grad-accum 8 --lr 6e-4
 
 echo "--- felix_500m ---"
 python scripts/train_scaled.py --config felix_500m --device cuda \
-    --batch-size 8 --grad-accum 32 --lr 1e-4
+    --batch-size 8 --grad-accum 32 --lr 6e-4
 
 echo "=== All experiments complete $(date) ==="
 
