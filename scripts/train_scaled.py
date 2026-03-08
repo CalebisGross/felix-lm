@@ -326,6 +326,7 @@ def train(config: FelixConfig, args):
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_val_ppl = float("inf")
     global_step = 0
+    lr = args.lr
 
     model.train()
     optimizer.zero_grad()
