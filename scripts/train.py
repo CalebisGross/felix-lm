@@ -58,6 +58,8 @@ from felix_lm.config import (
 )
 from felix_lm.model import FelixLM
 from felix_lm.utils import count_parameters
+from felix_lm.v2.config import FelixV2Config
+from felix_lm.v2.model import FelixLMv2
 
 # --- Data ---
 
@@ -130,12 +132,21 @@ def train(config: FelixConfig, args):
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
     # Model
-    model = FelixLM(config).to(device)
+    if isinstance(config, FelixV2Config):
+        model = FelixLMv2(config).to(device)
+    else:
+        model = FelixLM(config).to(device)
     if args.compile:
         print("Compiling model with torch.compile...")
         model = torch.compile(model)
     n_params = count_parameters(model)
-    print(f"\nModel: {config.num_stages} stages, {config.total_layers} layers, {n_params:,} params")
+    if isinstance(config, FelixV2Config):
+        print(f"\nModel: v2 adaptive, {config.total_layers} layers, {n_params:,} params")
+    else:
+        print(
+            f"\nModel: {config.num_stages} stages, {config.total_layers} layers,"
+            f" {n_params:,} params"
+        )
 
     # Autocast setup for mixed precision
     if use_mps:
@@ -185,44 +196,43 @@ def train(config: FelixConfig, args):
     if args.use_wandb:
         import wandb
 
-        wandb.init(
-            project="felix-lm",
-            config={
-                "model": args.config_name,
-                "params": n_params,
-                "stages": config.num_stages,
-                "layers": config.total_layers,
-                "batch_size": args.batch_size,
-                "grad_accum": args.grad_accum,
-                "effective_batch_size": args.batch_size * args.grad_accum,
-                "seq_len": args.seq_len,
-                "lr": args.lr,
-                "epochs": args.epochs,
-                "weight_decay": args.weight_decay,
-            },
-        )
+        wandb_config = {
+            "model": args.config_name,
+            "params": n_params,
+            "layers": config.total_layers,
+            "batch_size": args.batch_size,
+            "grad_accum": args.grad_accum,
+            "effective_batch_size": args.batch_size * args.grad_accum,
+            "seq_len": args.seq_len,
+            "lr": args.lr,
+            "epochs": args.epochs,
+            "weight_decay": args.weight_decay,
+        }
+        if not isinstance(config, FelixV2Config):
+            wandb_config["stages"] = config.num_stages
+        wandb.init(project="felix-lm", config=wandb_config)
 
-    # Freeze schedule
+    # Freeze schedule (v1 only)
     frozen_params = []
-    if config.freeze_stream_init_steps > 0:
-        for name, param in model.named_parameters():
-            if "embedding.stream_projections" in name:
-                param.requires_grad = False
-                frozen_params.append((name, param))
-        print(
-            f"  Frozen {len(frozen_params)} stream init params for "
-            f"{config.freeze_stream_init_steps} steps"
-        )
-
-    if config.progressive_unfreeze:
-        # Freeze all stages except the last one
-        for k in range(config.num_stages - 1):
-            for param in model.stages[k].parameters():
-                param.requires_grad = False
-            if k < len(model.merges):
-                for param in model.merges[k].parameters():
+    if not isinstance(config, FelixV2Config):
+        if config.freeze_stream_init_steps > 0:
+            for name, param in model.named_parameters():
+                if "embedding.stream_projections" in name:
                     param.requires_grad = False
-        print(f"  Progressive unfreeze: only Stage {config.num_stages - 1} trainable initially")
+                    frozen_params.append((name, param))
+            print(
+                f"  Frozen {len(frozen_params)} stream init params for "
+                f"{config.freeze_stream_init_steps} steps"
+            )
+
+        if config.progressive_unfreeze:
+            for k in range(config.num_stages - 1):
+                for param in model.stages[k].parameters():
+                    param.requires_grad = False
+                if k < len(model.merges):
+                    for param in model.merges[k].parameters():
+                        param.requires_grad = False
+            print(f"  Progressive unfreeze: only Stage {config.num_stages - 1} trainable initially")
 
     # Training loop
     global_step = 0
@@ -279,38 +289,40 @@ def train(config: FelixConfig, args):
                 accum_loss = 0.0
                 global_step += 1
 
-                # Supervision curriculum: turn off supervision after N steps
-                if (
-                    args.supervision_off_after > 0
-                    and global_step == args.supervision_off_after
-                    and model.loss_fn is not None
-                ):
-                    model.loss_fn = None
-                    config.use_deep_supervision = False
-                    print(f"\n  Supervision OFF at step {global_step} (curriculum)")
+                # v1-only training schedules
+                if not isinstance(config, FelixV2Config):
+                    # Supervision curriculum
+                    if (
+                        args.supervision_off_after > 0
+                        and global_step == args.supervision_off_after
+                        and model.loss_fn is not None
+                    ):
+                        model.loss_fn = None
+                        config.use_deep_supervision = False
+                        print(f"\n  Supervision OFF at step {global_step} (curriculum)")
 
-                # Unfreeze stream init projections after N steps
-                if (
-                    config.freeze_stream_init_steps > 0
-                    and global_step == config.freeze_stream_init_steps
-                ):
-                    for name, param in frozen_params:
-                        param.requires_grad = True
-                    print(f"\n  Unfroze stream init params at step {global_step}")
+                    # Unfreeze stream init projections
+                    if (
+                        config.freeze_stream_init_steps > 0
+                        and global_step == config.freeze_stream_init_steps
+                    ):
+                        for name, param in frozen_params:
+                            param.requires_grad = True
+                        print(f"\n  Unfroze stream init params at step {global_step}")
 
-                # Progressive unfreeze: back-to-front
-                if config.progressive_unfreeze:
-                    unfreeze_interval = max_steps // config.num_stages
-                    for k in range(config.num_stages - 1):
-                        unfreeze_at = max_steps - (k + 1) * unfreeze_interval
-                        if global_step == unfreeze_at:
-                            stage_idx = config.num_stages - 2 - k
-                            for param in model.stages[stage_idx].parameters():
-                                param.requires_grad = True
-                            if stage_idx < len(model.merges):
-                                for param in model.merges[stage_idx].parameters():
+                    # Progressive unfreeze: back-to-front
+                    if config.progressive_unfreeze:
+                        unfreeze_interval = max_steps // config.num_stages
+                        for k in range(config.num_stages - 1):
+                            unfreeze_at = max_steps - (k + 1) * unfreeze_interval
+                            if global_step == unfreeze_at:
+                                stage_idx = config.num_stages - 2 - k
+                                for param in model.stages[stage_idx].parameters():
                                     param.requires_grad = True
-                            print(f"\n  Unfroze Stage {stage_idx} at step {global_step}")
+                                if stage_idx < len(model.merges):
+                                    for param in model.merges[stage_idx].parameters():
+                                        param.requires_grad = True
+                                print(f"\n  Unfroze Stage {stage_idx} at step {global_step}")
 
                 if args.use_wandb and global_step % args.log_interval == 0:
                     log_dict = {
@@ -328,6 +340,17 @@ def train(config: FelixConfig, args):
                         for k, ag in enumerate(last_result["stream_agreements"]):
                             log_dict[f"train/agreement_merge_{k}"] = (
                                 ag.item() if hasattr(ag, "item") else ag
+                            )
+                    # v2-specific: per-layer agreements and merge strengths
+                    if last_result and "agreements" in last_result:
+                        for k, ag in enumerate(last_result["agreements"]):
+                            log_dict[f"v2/agreement_layer_{k}"] = (
+                                ag.item() if hasattr(ag, "item") else ag
+                            )
+                    if last_result and "merge_strengths" in last_result:
+                        for k, ms in enumerate(last_result["merge_strengths"]):
+                            log_dict[f"v2/merge_strength_layer_{k}"] = (
+                                ms.item() if hasattr(ms, "item") else ms
                             )
 
                     import wandb
@@ -447,6 +470,7 @@ def main():
             "m2_stream_permute",
             "m2_streamdrop",
             "m2_tcg",
+            "felix_v2",
         ],
         help="Model config",
     )
@@ -533,6 +557,7 @@ def main():
         "m2_stream_permute": make_m2_stream_permute_config,
         "m2_streamdrop": make_m2_streamdrop_config,
         "m2_tcg": make_m2_tcg_config,
+        "felix_v2": FelixV2Config,
     }
     config = configs[args.config]()
 
@@ -541,7 +566,7 @@ def main():
         config.rope_helical_turns = args.rope_turns
         print(f"  Override: rope_helical_turns = {args.rope_turns}")
 
-    if args.supervision_off_after > 0:
+    if args.supervision_off_after > 0 and not isinstance(config, FelixV2Config):
         # Ensure supervision starts ON for curriculum training
         if not config.use_deep_supervision:
             config.use_deep_supervision = True

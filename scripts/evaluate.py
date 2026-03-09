@@ -13,6 +13,8 @@ from torch.utils.data import DataLoader
 
 from felix_lm.model import FelixLM
 from felix_lm.utils import count_parameters
+from felix_lm.v2.config import FelixV2Config
+from felix_lm.v2.model import FelixLMv2
 
 
 def main():
@@ -31,12 +33,19 @@ def main():
     print(f"Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = ckpt["config"]
-    model = FelixLM(config).to(device)
+    if isinstance(config, FelixV2Config):
+        model = FelixLMv2(config).to(device)
+    else:
+        model = FelixLM(config).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
 
     n_params = count_parameters(model)
-    print(f"Model: {config.num_stages} stages, {n_params:,} params")
+    if isinstance(config, FelixV2Config):
+        nl, ns = config.num_layers, config.num_streams
+        print(f"Model: v2 ({nl} layers, {ns} streams), {n_params:,} params")
+    else:
+        print(f"Model: {config.num_stages} stages, {n_params:,} params")
     print(f"Trained for {ckpt.get('step', '?')} steps")
 
     # Load data
