@@ -16,6 +16,7 @@ Forward pass:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 from felix_lm.embedding import StreamInitialization
 from felix_lm.rope import build_rope_cache
@@ -86,6 +87,25 @@ class FelixLMv2(nn.Module):
         if config.tie_embeddings:
             self._logit_scale = config.d_embed**-0.5
 
+    def _checkpointed_layer(self, layer, streams, central_post):
+        """Run a layer with gradient checkpointing."""
+        N = len(streams)
+        # Pack streams + central_post into a single tuple of tensors
+        all_tensors = (*streams, central_post)
+
+        def run_layer(*tensors):
+            s_list = list(tensors[:N])
+            cp = tensors[N]
+            s_out, cp_out, agreement, strength = layer(s_list, cp)
+            return (*s_out, cp_out, agreement, strength)
+
+        out = grad_checkpoint(run_layer, *all_tensors, use_reentrant=False)
+        streams_out = list(out[:N])
+        central_post_out = out[N]
+        agreement = out[N + 1]
+        strength = out[N + 2]
+        return streams_out, central_post_out, agreement, strength
+
     def forward(
         self,
         token_ids: torch.Tensor,
@@ -117,8 +137,14 @@ class FelixLMv2(nn.Module):
         # Process through Felix layers
         agreements = []
         merge_strengths = []
+        use_ckpt = config.gradient_checkpointing and self.training
         for layer in self.layers:
-            streams, central_post, agreement, strength = layer(streams, central_post)
+            if use_ckpt:
+                streams, central_post, agreement, strength = self._checkpointed_layer(
+                    layer, streams, central_post
+                )
+            else:
+                streams, central_post, agreement, strength = layer(streams, central_post)
             agreements.append(agreement.mean().detach())
             merge_strengths.append(strength.mean().detach())
 

@@ -180,6 +180,7 @@ def make_felix_v2_500m_config() -> FelixV2Config:
 
     d_embed=1024, d_stream=512, d_post=512, 4 streams, 21 layers + 2 refine.
     Embedding: 51.5M. Stream layers: ~352.4M. CentralPost: ~44.1M. Refine: ~33.6M.
+    Gradient checkpointing enabled (4 streams * full causal needs it at 500M).
     """
     return FelixV2Config(
         vocab_size=50257,
@@ -193,6 +194,7 @@ def make_felix_v2_500m_config() -> FelixV2Config:
         num_refine_heads=16,  # head_dim=64
         ffn_mult=4,
         dropout=0.1,
+        gradient_checkpointing=True,
     )
 
 

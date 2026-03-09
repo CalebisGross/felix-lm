@@ -42,6 +42,7 @@ class FelixV2Config:
     # Training
     tie_embeddings: bool = True
     dropout: float = 0.1
+    gradient_checkpointing: bool = False
 
     @property
     def total_layers(self) -> int:
