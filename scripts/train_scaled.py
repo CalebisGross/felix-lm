@@ -5,6 +5,8 @@ Usage:
     python scripts/train_scaled.py --config m0_100m --device cuda
     python scripts/train_scaled.py --config felix_500m --device cuda
     python scripts/train_scaled.py --config m0_500m --device cuda
+    python scripts/train_scaled.py --config felix_v2_100m --device cuda
+    python scripts/train_scaled.py --config felix_v2_500m --device cuda
 """
 
 import argparse
@@ -18,6 +20,8 @@ from tqdm import tqdm
 from felix_lm.config import FelixConfig, StageConfig
 from felix_lm.model import FelixLM
 from felix_lm.utils import count_parameters
+from felix_lm.v2.config import FelixV2Config
+from felix_lm.v2.model import FelixLMv2
 
 # --- Configs ---
 
@@ -150,11 +154,55 @@ def make_felix_500m_config() -> FelixConfig:
     )
 
 
+def make_felix_v2_100m_config() -> FelixV2Config:
+    """Felix v2 at ~101M params. Adaptive convergence architecture.
+
+    d_embed=512, d_stream=256, d_post=256, 4 streams, 14 layers + 2 refine.
+    Embedding: 25.7M. Stream layers: ~58.7M. CentralPost: ~7.4M. Refine: ~8.4M.
+    """
+    return FelixV2Config(
+        vocab_size=50257,
+        d_embed=512,
+        d_stream=256,
+        d_post=256,
+        num_streams=4,
+        num_layers=14,
+        num_heads=8,  # head_dim=32
+        num_refine_layers=2,
+        num_refine_heads=8,  # head_dim=64
+        ffn_mult=4,
+        dropout=0.1,
+    )
+
+
+def make_felix_v2_500m_config() -> FelixV2Config:
+    """Felix v2 at ~484M params. Adaptive convergence architecture.
+
+    d_embed=1024, d_stream=512, d_post=512, 4 streams, 21 layers + 2 refine.
+    Embedding: 51.5M. Stream layers: ~352.4M. CentralPost: ~44.1M. Refine: ~33.6M.
+    """
+    return FelixV2Config(
+        vocab_size=50257,
+        d_embed=1024,
+        d_stream=512,
+        d_post=512,
+        num_streams=4,
+        num_layers=21,
+        num_heads=16,  # head_dim=32
+        num_refine_layers=2,
+        num_refine_heads=16,  # head_dim=64
+        ffn_mult=4,
+        dropout=0.1,
+    )
+
+
 CONFIGS = {
     "m0_100m": make_m0_100m_config,
     "felix_100m": make_felix_100m_config,
     "m0_500m": make_m0_500m_config,
     "felix_500m": make_felix_500m_config,
+    "felix_v2_100m": make_felix_v2_100m_config,
+    "felix_v2_500m": make_felix_v2_500m_config,
 }
 
 
@@ -263,11 +311,22 @@ def get_lr(step: int, warmup_steps: int, max_steps: int, max_lr: float, min_lr: 
 # --- Training ---
 
 
-def train(config: FelixConfig, args):
+def train(config, args):
     device = torch.device(args.device)
-    model = FelixLM(config).to(device)
+    is_v2 = isinstance(config, FelixV2Config)
+    if is_v2:
+        model = FelixLMv2(config).to(device)
+    else:
+        model = FelixLM(config).to(device)
     n_params = count_parameters(model)
-    print(f"\nModel: {config.num_stages} stages, {config.total_layers} layers, {n_params:,} params")
+    if is_v2:
+        print(
+            f"\nModel: v2 ({config.num_layers}+{config.num_refine_layers} layers, "
+            f"{config.num_streams} streams), {n_params:,} params"
+        )
+    else:
+        ns, tl = config.num_stages, config.total_layers
+        print(f"\nModel: {ns} stages, {tl} layers, {n_params:,} params")
 
     # Mixed precision
     if args.dtype == "fp32":
@@ -379,9 +438,17 @@ def train(config: FelixConfig, args):
         if not args.no_wandb and global_step % 10 == 0:
             import wandb
 
-            wandb.log(
-                {"train/loss": actual_loss, "train/ppl": ppl, "train/lr": lr}, step=global_step
-            )
+            log_dict = {
+                "train/loss": actual_loss,
+                "train/ppl": ppl,
+                "train/lr": lr,
+            }
+            if is_v2 and "agreements" in result:
+                for i, a in enumerate(result["agreements"]):
+                    log_dict[f"v2/agreement_layer_{i}"] = a.item()
+                for i, s in enumerate(result["merge_strengths"]):
+                    log_dict[f"v2/merge_strength_layer_{i}"] = s.item()
+            wandb.log(log_dict, step=global_step)
 
         # Eval
         if global_step % args.eval_interval == 0:
