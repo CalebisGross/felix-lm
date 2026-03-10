@@ -45,7 +45,7 @@ class FelixLMv2(nn.Module):
                     d_post=config.d_post,
                     num_streams=config.num_streams,
                     num_heads=config.num_heads,
-                    attention_type=config.attention_type,
+                    attention_type=config.get_attention_type(i),
                     ffn_mult=config.ffn_mult,
                     layer_idx=i,
                     total_layers=config.total_layers,

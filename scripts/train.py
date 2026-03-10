@@ -471,6 +471,7 @@ def main():
             "m2_streamdrop",
             "m2_tcg",
             "felix_v2",
+            "felix_v2_hetero",
         ],
         help="Model config",
     )
@@ -558,6 +559,9 @@ def main():
         "m2_streamdrop": make_m2_streamdrop_config,
         "m2_tcg": make_m2_tcg_config,
         "felix_v2": FelixV2Config,
+        "felix_v2_hetero": lambda: FelixV2Config(
+            attention_schedule=(["linear"] * 4 + ["sliding_window"] * 4 + ["full_causal"] * 5),
+        ),
     }
     config = configs[args.config]()
 

@@ -1,6 +1,6 @@
 """Felix-LM v2 configuration."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -25,6 +25,9 @@ class FelixV2Config:
     num_refine_heads: int = 4  # head_dim = d_embed // num_refine_heads = 32
     ffn_mult: int = 4
     attention_type: str = "full_causal"
+    # Per-layer attention schedule. If non-empty, overrides attention_type.
+    # Must be length num_layers. e.g. ["linear"]*4 + ["sliding_window"]*4 + ["full_causal"]*5
+    attention_schedule: list[str] = field(default_factory=list)
 
     # CentralPost
     cp_read_gated: bool = True
@@ -43,6 +46,12 @@ class FelixV2Config:
     tie_embeddings: bool = True
     dropout: float = 0.1
     gradient_checkpointing: bool = False
+
+    def get_attention_type(self, layer_idx: int) -> str:
+        """Get attention type for a given layer index."""
+        if self.attention_schedule:
+            return self.attention_schedule[layer_idx]
+        return self.attention_type
 
     @property
     def total_layers(self) -> int:

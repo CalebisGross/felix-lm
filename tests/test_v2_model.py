@@ -161,3 +161,37 @@ def test_no_loss_without_targets():
 
     assert "loss" not in result
     assert "logits" in result
+
+
+def test_hetero_attention_schedule():
+    """v2 with hetero attention schedule should work and produce valid output."""
+    config = FelixV2Config(
+        vocab_size=256,
+        d_embed=32,
+        d_stream=16,
+        d_post=16,
+        num_streams=4,
+        num_layers=6,
+        num_heads=2,
+        num_refine_layers=1,
+        num_refine_heads=2,
+        ffn_mult=2,
+        dropout=0.0,
+        attention_schedule=["linear"] * 2 + ["sliding_window"] * 2 + ["full_causal"] * 2,
+    )
+    model = FelixLMv2(config)
+
+    B, T = 2, 16
+    token_ids = torch.randint(0, config.vocab_size, (B, T))
+    targets = torch.randint(0, config.vocab_size, (B, T))
+    result = model(token_ids, targets)
+
+    assert result["logits"].shape == (B, T, config.vocab_size)
+    assert torch.isfinite(result["loss"]).all()
+
+    # Verify different attention types were actually used
+    attn_types = set()
+    for layer in model.layers:
+        for block in layer.stream_blocks:
+            attn_types.add(type(block.attn).__name__)
+    assert len(attn_types) == 3, f"Expected 3 attention types, got {attn_types}"
