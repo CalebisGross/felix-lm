@@ -924,7 +924,93 @@ training time for MSPM was approximately 2x that of M0 at 100M scale, meaning th
 compute-matched comparison is less favorable to MSPM than the parameter-matched comparison
 presented here.
 
-### 6.6 Felix-LM v2: Adaptive Convergence (11M)
+### 6.6 Felix-LM v2 Scaling Experiments (100M and 500M)
+
+To test whether v2's adaptive convergence crosses over earlier than v1, we ran v2 at 100M and 500M
+on the same MI300X droplet used for the v1 scaling experiments (Exps 43-46).
+
+**v2 scaling configs:**
+- v2_100m: 100.9M params. d_embed=512, d_stream=256, d_post=256, 4 streams, 14 layers + 2 refine,
+  4 heads per stream, full causal attention throughout. Batch=8, grad_accum=32 (eff=256). 1B tokens.
+- v2_500m: 484.2M params. d_embed=1024, d_stream=512, d_post=512, 4 streams, 21 layers + 2 refine,
+  8 heads per stream, full causal attention throughout, gradient checkpointing enabled.
+  Batch=32, grad_accum=8 (eff=256). **250M tokens** (reduced from 1B due to wall-clock constraints).
+
+Both use LR 1e-4, bf16, Dolma streaming, cosine decay, math SDPA backend.
+
+#### Experiment 48: felix_v2_100m — 100.9M params, 2026-03-09, 1 epoch (1B tokens)
+
+**Control:** M0 at 100M (Exp 43, 22,424 val PPL); MSPM v1 at 100M (Exp 44, 25,319 val PPL)
+**Variable:** Replace v1 fixed-stage MSPM with v2 adaptive convergence at 100M scale
+
+| Config | Params | Val PPL | vs M0 | vs v1 |
+|--------|--------|---------|-------|-------|
+| M0 (Exp 43) | 101.5M | 22,424 | — | — |
+| MSPM v1 (Exp 44) | 101.0M | 25,319 | +12.9% | — |
+| **Felix v2** | **100.9M** | **33,548** | **+49.6%** | **+32.5%** |
+
+v2 at 100M is substantially worse than both M0 and v1. The gap is large: 49.6% behind M0, compared
+to v1's 12.9% deficit. The likely cause is v2's use of full causal attention on all 4 streams at
+every layer. At 100M, the embedding still consumes 25% of the budget, leaving insufficient capacity
+for 4 independent full-causal transformer blocks per layer plus CentralPost overhead. In contrast,
+v1's hetero attention (linear in early stages, sliding window in middle) is far more parameter- and
+compute-efficient at this scale. The adaptive merge mechanism and CentralPost hub cannot compensate
+for the raw attention cost when streams are capacity-starved.
+
+#### Experiment 49: felix_v2_500m — 484.2M params, 2026-03-09, 1 epoch (250M tokens)
+
+**Control:** M0 at 500M (Exp 45, 21,894 val PPL); MSPM v1 at 500M (Exp 46, 17,552 val PPL)
+**Variable:** Replace v1 fixed-stage MSPM with v2 adaptive convergence at 500M scale
+
+| Config | Params | Val PPL | vs M0 | vs v1 |
+|--------|--------|---------|-------|-------|
+| M0 (Exp 45) | 489.4M | 21,894 | — | — |
+| MSPM v1 (Exp 46) | 486.2M | 17,552 | -19.8% | — |
+| **Felix v2** | **484.2M** | **16,724** | **-23.6%** | **-4.7%** |
+
+v2 at 500M achieves the best validation perplexity of any model tested, beating both M0 (-23.6%)
+and v1 (-4.7%). However, this comparison has a critical caveat: **v2 trained on only 250M tokens
+(1/4 of v1's 1B)**. The wall-clock training time was reduced due to v2's higher per-step cost
+(full causal attention + CentralPost + gradient checkpointing).
+
+There are two ways to interpret this result:
+
+**Optimistic interpretation:** v2 reached a better val PPL than v1 in 1/4 the tokens. This would
+mean v2's inductive bias (adaptive convergence, CentralPost hub communication) provides dramatically
+better token efficiency — the model learns faster per token because streams coordinate more
+effectively through the hub and merge when ready rather than on a fixed schedule.
+
+**Conservative interpretation:** v2 at 250M tokens may be at a point on its learning curve that
+happens to look good but would plateau or be overtaken by v1 at longer training. Early training
+dynamics can be misleading, and 250M tokens is heavily underfitted. The "best = inf" in the log
+(checkpoint tracking anomaly) adds uncertainty.
+
+The truth is likely somewhere between: v2 probably does have better token efficiency (consistent with
+the 11M result where v2 closed 71% of the gap), but the magnitude of the advantage is uncertain
+without a matched-token comparison. A definitive answer requires running v2 at 500M on the full 1B
+tokens.
+
+**Combined scaling picture:**
+
+| Scale | M0 | v1 MSPM | v2 | v1 vs M0 | v2 vs M0 | v2 vs v1 |
+|-------|-------|---------|---------|----------|----------|----------|
+| 11M | 91.81 | 101.39 | 94.61 | +10.4% | +3.1% | -6.7% |
+| 100M | 22,424 | 25,319 | 33,548 | +12.9% | +49.6% | +32.5% |
+| 500M | 21,894 | 17,552 | 16,724^ | -19.8% | -23.6% | -4.7% |
+
+^ 250M tokens (others trained on 1B). Not directly comparable.
+
+At 100M, v2 is dramatically worse — full causal attention everywhere is too expensive when capacity
+is limited. At 500M, v2 edges ahead of v1 even on fewer tokens, suggesting the architecture shines
+when streams have sufficient capacity. The full causal attention that hurts at 100M becomes an
+advantage at 500M: each stream processes with maximum expressiveness, and CentralPost coordinates
+them efficiently.
+
+The key takeaway: v2 needs v1-style hetero attention at smaller scales. A hybrid approach — v2's
+adaptive merge and CentralPost with v1's efficient attention types in early layers — could combine
+the best of both architectures.
+
+### 6.7 Felix-LM v2: Adaptive Convergence (11M)
 
 **Exp 47: felix_v2** — 10,848,006 params, 2026-03-09, 3 epochs
 
@@ -1021,9 +1107,12 @@ CentralPost read/write, partially offset by not needing large merge projections 
 | 45 | m0_500m | M0 at 500M scale | 1 (1B Dolma) | 21,894* | — | — |
 | 46 | **felix_500m** | **MSPM at 500M scale** | **1 (1B Dolma)** | **17,552*** | **-19.8%** | — |
 | 47 | **Felix v2** | **Adaptive convergence** | **3** | **94.61** | **+3.1%** | **-6.7%** |
+| 48 | felix_v2_100m | v2 at 100M scale | 1 (1B Dolma) | 33,548* | +49.6% | — |
+| 49 | **felix_v2_500m** | **v2 at 500M scale** | **1 (250M Dolma)** | **16,724*^** | **-23.6%** | — |
 
-\* Exps 43-46 use Dolma dataset (not WikiText-103) and LR 1e-4. Absolute PPL not comparable to
+\* Exps 43-49 use Dolma dataset (not WikiText-103) and LR 1e-4. Absolute PPL not comparable to
 Exps 1-42. Only relative comparisons within the scaling group are meaningful.
+^ Exp 49 trained on 250M tokens (1/4 of other scaling runs) due to wall-clock constraints.
 
 ### 7.2 Key Findings
 
@@ -1118,21 +1207,37 @@ Exps 1-42. Only relative comparisons within the scaling group are meaningful.
     v1 failure was partly architectural (rigid topology, no inter-stream communication) rather
     than fundamental to multi-stream approaches.
 
+18. **v2 at 100M is significantly worse than v1.** Full causal attention on all 4 streams at every
+    layer is too expensive at 100M (Exp 48: 33,548 vs v1's 25,319, +32.5%). v1's hetero attention
+    (linear in early stages) is far more parameter-efficient when streams are capacity-starved.
+    v2's architectural overhead (CentralPost + per-layer adaptive merge) compounds the problem.
+
+19. **v2 at 500M shows promise but needs matched-token validation.** v2 achieved 16,724 val PPL
+    on only 250M tokens, beating v1's 17,552 on 1B tokens (Exp 49). If this holds at matched
+    token counts, v2 has dramatically better token efficiency. But 250M tokens is heavily
+    underfitted, and early training dynamics can be misleading. A 1B-token v2_500m run is needed.
+
+20. **v2 needs hetero attention at smaller scales.** The scaling results suggest a hybrid
+    architecture: v2's adaptive merge and CentralPost with v1's efficient attention types
+    (linear/sliding window) in earlier layers. Full causal everywhere only pays off when streams
+    have sufficient capacity (500M+).
+
 ### 7.3 Open Questions
 
+- **Does v2_500m hold up at 1B tokens?** The 250M-token result (16,724) beats v1 at 1B tokens,
+  but this needs validation with a matched-token run. This is the single highest-priority
+  experiment.
+- **Would v2 + hetero attention fix the 100M gap?** v2's mechanisms (CentralPost, adaptive merge)
+  are sound but full causal attention everywhere is too expensive at 100M. A v2 variant with
+  v1-style hetero attention could combine the best of both.
 - **Where exactly is the crossover?** MSPM loses at 100M but wins at 500M. Testing at 200M
   and 300M would pin down the threshold. This matters for practical deployment decisions.
 - **Is 1e-4 the right LR at scale?** All scaling runs used 1e-4 (conservative). At 11M, 6e-4
   was optimal but differentially benefited M0. The LR sensitivity may differ at 500M — MSPM
   might benefit more from higher LR at this scale.
-- **Can v2 beat M0 at scale?** v2 already closes 71% of the gap at 11M. v1 crossed over at
-  500M with a 19.8% win — v2 should cross over earlier (possibly at 100M) and win by more.
-  A v2 scaling run is the highest-priority next experiment.
 - **Does the 2x wall-clock penalty change the conclusion?** MSPM took ~2x as long per step as
   M0 at 100M. If M0 trained for 2B tokens matches or beats MSPM at 1B tokens, the compute
   efficiency argument weakens. Token-matched AND compute-matched comparisons are both needed.
-- **Is 6e-4 the optimal LR for either architecture at 11M?** Neither has been tested at 8e-4
-  or 1e-3. There may be additional gains available.
 - **Multi-epoch scaling runs.** All scaling experiments were 1 epoch on 1B tokens — heavily
   underfitted. Longer training (3+ epochs or more tokens) would give more reliable absolute
   numbers and might change the relative gap.
