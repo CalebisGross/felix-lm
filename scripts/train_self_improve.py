@@ -165,6 +165,31 @@ def has_repetition(token_ids: list[int], n: int = 4, max_repeats: int = 3) -> bo
     return False
 
 
+def score_sequences_by_loss(
+    model: FelixLMv2, sequences: torch.Tensor, device: torch.device
+) -> torch.Tensor:
+    """Score sequences by per-sequence cross-entropy loss (lower = more natural).
+
+    Args:
+        model: frozen reference model for scoring.
+        sequences: [N, T] token ids.
+
+    Returns:
+        losses: [N] per-sequence mean loss.
+    """
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for i in range(len(sequences)):
+            seq = sequences[i : i + 1]  # [1, T]
+            input_ids = seq[:, :-1]
+            targets = seq[:, 1:]
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                result = model(input_ids, targets)
+            losses.append(result["loss"].item())
+    return torch.tensor(losses, device=device)
+
+
 def self_improvement_cycle(
     model: FelixLMv2,
     optimizer: torch.optim.Optimizer,
@@ -172,13 +197,14 @@ def self_improvement_cycle(
     val_loader: DataLoader,
     device: torch.device,
     args,
+    ref_model: FelixLMv2 | None = None,
 ) -> dict:
-    """Run one cycle of agreement-filtered self-improvement.
+    """Run one cycle of self-improvement.
 
     1. Sample random prompts from training data
     2. Generate completions
-    3. Filter by agreement + repetition
-    4. Train on high-agreement sequences
+    3. Filter by agreement/loss + repetition
+    4. Train on kept sequences
     5. Train on real data batches (prevent forgetting)
 
     Returns dict with cycle stats.
@@ -224,8 +250,21 @@ def self_improvement_cycle(
         "p75": all_agreements.quantile(0.75).item(),
     }
 
-    # 4. Filter by agreement threshold (adaptive or fixed)
-    if args.threshold_percentile is not None:
+    # 4. Filter: by reference-model loss or by agreement
+    if args.filter_by_loss and ref_model is not None:
+        # Score all sequences with frozen reference model
+        ref_losses = score_sequences_by_loss(ref_model, all_sequences, device)
+        agree_stats["ref_loss_mean"] = ref_losses.mean().item()
+        agree_stats["ref_loss_std"] = ref_losses.std().item()
+        agree_stats["ref_loss_p25"] = ref_losses.quantile(0.25).item()
+        agree_stats["ref_loss_p50"] = ref_losses.quantile(0.50).item()
+
+        # Keep top N% by lowest loss (most natural)
+        pct = args.threshold_percentile if args.threshold_percentile else 20.0
+        loss_cutoff = ref_losses.quantile(pct / 100.0)  # lower = better
+        kept_mask = ref_losses <= loss_cutoff
+        agree_stats["loss_cutoff"] = loss_cutoff.item()
+    elif args.threshold_percentile is not None:
         # Adaptive: keep top N% by agreement
         cutoff = all_agreements.quantile(1.0 - args.threshold_percentile / 100.0)
         kept_mask = all_agreements >= cutoff
@@ -335,6 +374,11 @@ def main():
         help="Keep top N%% by agreement (overrides --agreement-threshold)",
     )
     parser.add_argument(
+        "--filter-by-loss",
+        action="store_true",
+        help="Filter by reference model loss instead of agreement",
+    )
+    parser.add_argument(
         "--self-lr", type=float, default=1e-5, help="Learning rate for self-improvement"
     )
     parser.add_argument("--real-batches", type=int, default=5, help="Real data batches per cycle")
@@ -371,6 +415,15 @@ def main():
     # Load model
     model, config = load_checkpoint(str(ckpt_path), device)
 
+    # Create frozen reference model for loss-based filtering
+    ref_model = None
+    if args.filter_by_loss:
+        print("Loading frozen reference model for loss-based filtering...")
+        ref_model, _ = load_checkpoint(str(ckpt_path), device)
+        ref_model.eval()
+        for p in ref_model.parameters():
+            p.requires_grad_(False)
+
     # Load data
     print("\nLoading data...")
     train_dataset = WikiTextDataset("train", seq_len=512, cache_dir="./data")
@@ -387,7 +440,10 @@ def main():
 
     # Self-improvement loop
     print(f"\n=== Self-Improvement ({args.n_cycles} cycles) ===")
-    if args.threshold_percentile is not None:
+    if args.filter_by_loss:
+        pct = args.threshold_percentile if args.threshold_percentile else 20.0
+        print(f"  filter=ref_model_loss (top {pct}% lowest loss)")
+    elif args.threshold_percentile is not None:
         print(f"  threshold_percentile=top {args.threshold_percentile}%")
     else:
         print(f"  agreement_threshold={args.agreement_threshold}")
@@ -406,7 +462,9 @@ def main():
 
     for cycle in range(1, args.n_cycles + 1):
         cycle_start = time.time()
-        stats = self_improvement_cycle(model, optimizer, train_dataset, val_loader, device, args)
+        stats = self_improvement_cycle(
+            model, optimizer, train_dataset, val_loader, device, args, ref_model
+        )
         cycle_time = time.time() - cycle_start
         total_kept += stats["kept"]
 
@@ -430,6 +488,14 @@ def main():
                 f"p25={a['p25']:.3f} p50={a['p50']:.3f} p75={a['p75']:.3f}"
                 f"{cutoff_str}"
             )
+            if "ref_loss_mean" in a:
+                print(
+                    f"    Ref loss: mean={a['ref_loss_mean']:.3f} "
+                    f"std={a['ref_loss_std']:.3f} "
+                    f"p25={a['ref_loss_p25']:.3f} "
+                    f"p50={a['ref_loss_p50']:.3f} "
+                    f"cutoff={a['loss_cutoff']:.3f}"
+                )
 
         # Periodic evaluation
         if cycle % args.eval_interval == 0:
