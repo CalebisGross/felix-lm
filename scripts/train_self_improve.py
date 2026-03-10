@@ -224,8 +224,14 @@ def self_improvement_cycle(
         "p75": all_agreements.quantile(0.75).item(),
     }
 
-    # 4. Filter by agreement threshold
-    kept_mask = all_agreements >= args.agreement_threshold
+    # 4. Filter by agreement threshold (adaptive or fixed)
+    if args.threshold_percentile is not None:
+        # Adaptive: keep top N% by agreement
+        cutoff = all_agreements.quantile(1.0 - args.threshold_percentile / 100.0)
+        kept_mask = all_agreements >= cutoff
+        agree_stats["adaptive_cutoff"] = cutoff.item()
+    else:
+        kept_mask = all_agreements >= args.agreement_threshold
 
     # 5. Filter by repetition
     kept_indices = []
@@ -323,6 +329,12 @@ def main():
         "--agreement-threshold", type=float, default=0.3, help="Min agreement to keep"
     )
     parser.add_argument(
+        "--threshold-percentile",
+        type=float,
+        default=None,
+        help="Keep top N%% by agreement (overrides --agreement-threshold)",
+    )
+    parser.add_argument(
         "--self-lr", type=float, default=1e-5, help="Learning rate for self-improvement"
     )
     parser.add_argument("--real-batches", type=int, default=5, help="Real data batches per cycle")
@@ -375,7 +387,10 @@ def main():
 
     # Self-improvement loop
     print(f"\n=== Self-Improvement ({args.n_cycles} cycles) ===")
-    print(f"  agreement_threshold={args.agreement_threshold}")
+    if args.threshold_percentile is not None:
+        print(f"  threshold_percentile=top {args.threshold_percentile}%")
+    else:
+        print(f"  agreement_threshold={args.agreement_threshold}")
     print(f"  self_lr={args.self_lr}")
     print(f"  n_generate={args.n_generate}")
     print(f"  real_batches={args.real_batches}")
@@ -406,10 +421,14 @@ def main():
         # Log agreement stats on first cycle and every eval_interval
         if cycle == 1 or cycle % args.eval_interval == 0:
             a = stats["agree_stats"]
+            cutoff_str = ""
+            if "adaptive_cutoff" in a:
+                cutoff_str = f" cutoff={a['adaptive_cutoff']:.3f}"
             print(
                 f"    Agreement: mean={a['mean']:.3f} std={a['std']:.3f} "
                 f"min={a['min']:.3f} max={a['max']:.3f} "
                 f"p25={a['p25']:.3f} p50={a['p50']:.3f} p75={a['p75']:.3f}"
+                f"{cutoff_str}"
             )
 
         # Periodic evaluation
