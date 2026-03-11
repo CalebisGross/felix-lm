@@ -201,3 +201,122 @@ Possible pivots:
 - **Rethink the approach:** Agreement may only be useful as a training signal when there's
   a verifiable correctness criterion. For open-ended LM, we might need a different signal
   entirely (e.g., perplexity under the original checkpoint as a quality filter).
+
+---
+
+## Experiment S3: Reference-Model Loss Filter, LR 1e-5
+
+**Date:** 2026-03-10 | **Checkpoint:** felix_v2/best.pt (step 21500, 94.50 val PPL)
+
+**Hypothesis:** Filtering by frozen reference model's perplexity (instead of agreement) will
+select generations that stay close to the learned data distribution. Because the reference
+model is frozen, the quality criterion can't drift like agreement did in S1-S2.
+
+**Variable changed from S2:** Filter criterion switched from adaptive agreement percentile
+to frozen reference model's per-sequence loss (top 20% lowest loss = most natural).
+
+| Parameter | Value |
+|-----------|-------|
+| Baseline checkpoint | felix_v2/best.pt (94.50 val PPL) |
+| Filter | Ref model loss, top 20% lowest |
+| Self-improvement LR | 1e-5 |
+| Sequences per cycle | 200 |
+| Real data batches/cycle | 5 |
+| Temperature | 0.8, top-k 50 |
+| Prompt / gen length | 64 / 64 tokens |
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| Baseline val PPL | 94.50 |
+| Final val PPL | 94.50 (patience stall) |
+| Best val PPL seen | 95.94 (cycle 5) |
+| Delta | +0.00 (reverted to baseline) |
+| Cycles completed | 20 / 40 (stalled at patience=4) |
+| Total kept | 745 |
+| Time | 4532s (~76 min) |
+
+**Per-cycle keep rate:**
+
+| Cycle | Kept/Total | Self Loss | Real Loss |
+|-------|------------|-----------|-----------|
+| 1 | 36/200 | 3.0198 | 4.8204 |
+| 5 | 36/200 | 2.8930 | 4.7373 |
+| 10 | 35/200 | 2.8397 | 4.6462 |
+| 15 | 39/200 | 2.7667 | 4.7665 |
+| 20 | 38/200 | 2.8294 | 4.8064 |
+
+**Reference loss distribution (stable, no drift):**
+
+| Cycle | Ref Loss Mean | Ref Loss Std | p25 | p50 | Cutoff |
+|-------|---------------|--------------|-----|-----|--------|
+| 1 | 3.574 | 0.487 | 3.277 | 3.600 | 3.197 |
+| 5 | 3.550 | 0.502 | 3.257 | 3.608 | 3.171 |
+| 10 | 3.483 | 0.465 | 3.197 | 3.504 | 3.096 |
+| 15 | 3.506 | 0.517 | 3.158 | 3.554 | 3.050 |
+| 20 | 3.528 | 0.451 | 3.245 | 3.570 | 3.149 |
+
+**Agreement distribution (no drift, confirming loss filter doesn't push agreement):**
+
+| Cycle | Mean | Std |
+|-------|------|-----|
+| 1 | 0.574 | 0.011 |
+| 5 | 0.574 | 0.011 |
+| 10 | 0.576 | 0.012 |
+| 15 | 0.575 | 0.011 |
+| 20 | 0.577 | 0.010 |
+
+### Analysis
+
+S3 validates the frozen-reference approach: no drift in either agreement or ref loss
+distributions. The filter is stable and well-calibrated. But the model still doesn't improve.
+
+The key insight comparing across all three experiments:
+
+| Exp | Filter | Drift? | Worst Val PPL | Stability |
+|-----|--------|--------|---------------|-----------|
+| S1 | Fixed agreement 0.57 | Yes (severe) | 102.03 | Safety revert at cycle 5 |
+| S2 | Adaptive top-20% agreement | Yes (moderate) | 97.41 | Patience stall at cycle 20 |
+| S3 | Ref model loss top-20% | No | 96.54 | Patience stall at cycle 20 |
+
+S3 is the most stable (smallest degradation: +2.04 vs S2's +2.91 vs S1's +7.53), but
+stability without improvement is still failure. The progression from S1 to S3 solved the
+drift problem but revealed the deeper issue: **self-generated data at 11M scale is not
+informative enough to improve the model, regardless of how it's filtered.**
+
+The self-loss is consistently lower than real-loss (2.8-3.0 vs 4.5-4.8), meaning the model
+finds its own generations much easier than real data. Training on easy self-generated sequences
+doesn't push the model toward harder, more informative patterns. It's the equivalent of a
+student studying only problems they already know how to solve.
+
+---
+
+## Conclusion: Self-Improvement at 11M Scale
+
+Three experiments with three different filtering strategies all reached the same result:
++0.00 PPL (safety revert or patience stall). The approach does not work at this scale.
+
+**Why it fails:**
+
+1. **No verifiable signal.** In arithmetic (felix-auto), agreement correlated with
+   correctness because there was a ground truth. In open-ended LM, agreement correlates
+   with stream consensus, which is orthogonal to generation quality. The frozen ref-model
+   loss is more stable but equally uninformative — it just measures how well the generation
+   matches the model's existing distribution, which is circular.
+
+2. **Self-generated data is too easy.** The model's own outputs have loss ~3.0 while real
+   data has loss ~4.7. Training on filtered self-generations is training on the easy part
+   of the distribution. There's no mechanism to push the model toward the hard, informative
+   examples it hasn't mastered yet.
+
+3. **11M scale may be too small.** At 11M params, the model has limited capacity. It may
+   already be near its capacity ceiling on WikiText-103, leaving no room for self-improvement
+   to find gains. The narrow agreement distribution (std=0.01) supports this — the model
+   is similarly confident/uncertain everywhere, with no meaningful variance to exploit.
+
+**What would need to change:**
+- A verifiable quality signal (e.g., factual consistency, task-specific correctness)
+- Adversarial or contrastive generation (generate hard examples, not easy ones)
+- Much larger model where capacity ceiling is higher
+- External reward signal (RLHF-style) rather than self-supervision
