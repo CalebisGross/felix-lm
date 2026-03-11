@@ -186,7 +186,14 @@ def train(config: FelixConfig, args):
 
     # Training params
     steps_per_epoch = len(train_loader) // args.grad_accum
-    max_steps = args.epochs * steps_per_epoch
+    if args.max_steps:
+        max_steps = args.max_steps
+        # Cap warmup at 10% of max_steps for short runs
+        if args.warmup_steps > max_steps // 10:
+            args.warmup_steps = max(1, max_steps // 10)
+            print(f"  Scaled warmup to {args.warmup_steps} steps for short run")
+    else:
+        max_steps = args.epochs * steps_per_epoch
     ga = args.grad_accum
     print(f"\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch")
     print(f"  grad_accum={ga}, {max_steps} total steps")
@@ -289,6 +296,10 @@ def train(config: FelixConfig, args):
                 accum_loss = 0.0
                 global_step += 1
 
+                # Max steps early exit
+                if args.max_steps and global_step >= args.max_steps:
+                    break
+
                 # v1-only training schedules
                 if not isinstance(config, FelixV2Config):
                     # Supervision curriculum
@@ -386,6 +397,10 @@ def train(config: FelixConfig, args):
 
         avg_loss = epoch_loss / epoch_tokens
         print(f"Epoch {epoch + 1} avg loss: {avg_loss:.4f}, ppl: {math.exp(min(avg_loss, 20)):.2f}")
+
+        if args.max_steps and global_step >= args.max_steps:
+            print(f"Reached max_steps={args.max_steps}, stopping.")
+            break
 
     # Final evaluation
     val_ppl = evaluate(model, val_loader, device)
@@ -485,6 +500,9 @@ def main():
     )
     parser.add_argument("--seq-len", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--max-steps", type=int, default=None, help="Stop after N steps (overrides epochs)"
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--warmup-steps", type=int, default=1000)
