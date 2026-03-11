@@ -296,10 +296,6 @@ def train(config: FelixConfig, args):
                 accum_loss = 0.0
                 global_step += 1
 
-                # Max steps early exit
-                if args.max_steps and global_step >= args.max_steps:
-                    break
-
                 # v1-only training schedules
                 if not isinstance(config, FelixV2Config):
                     # Supervision curriculum
@@ -394,6 +390,10 @@ def train(config: FelixConfig, args):
                         {"model": model.state_dict(), "config": config, "step": global_step},
                         ckpt_dir / f"step_{global_step}.pt",
                     )
+
+                # Max steps early exit (after eval/checkpoint so final step is saved)
+                if args.max_steps and global_step >= args.max_steps:
+                    break
 
         avg_loss = epoch_loss / epoch_tokens
         print(f"Epoch {epoch + 1} avg loss: {avg_loss:.4f}, ppl: {math.exp(min(avg_loss, 20)):.2f}")
