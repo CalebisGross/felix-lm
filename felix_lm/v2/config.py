@@ -27,7 +27,10 @@ class FelixV2Config:
     attention_type: str = "full_causal"
     # Per-layer attention schedule. If non-empty, overrides attention_type.
     # Must be length num_layers. e.g. ["linear"]*4 + ["sliding_window"]*4 + ["full_causal"]*5
-    attention_schedule: list[str] = field(default_factory=list)
+    # Default: hetero schedule (linear→sliding→fullcausal) — proven beneficial in v1
+    attention_schedule: list[str] = field(
+        default_factory=lambda: ["linear"] * 4 + ["sliding_window"] * 4 + ["full_causal"] * 5
+    )
 
     # CentralPost
     cp_read_gated: bool = True
