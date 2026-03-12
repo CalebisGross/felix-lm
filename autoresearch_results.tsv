@@ -1,0 +1,6 @@
+commit	val_ppl	status	description
+ddae366	378.94	keep	baseline (no ckpt fix): v2 default, 2500 steps, final model
+9fe8053	374.83	keep	baseline: v2 default config, 2500 steps, proper ckpt
+4de5473	377.42	discard	exp1: hetero attention schedule (linear*4+sliding*4+fullcausal*5)
+e767f30	351.94	keep	exp2: dropout 0.1->0.0
+3a5b95c	329.34	keep	exp3: shift compute to refine phase (9 stream + 6 refine layers)
