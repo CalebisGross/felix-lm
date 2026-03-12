@@ -6,3 +6,4 @@ e767f30	351.94	keep	exp2: dropout 0.1->0.0
 3a5b95c	329.34	keep	exp3: shift compute to refine phase (9 stream + 6 refine layers)
 c3e6e32	323.07	keep	exp4: push refine further (6 stream + 9 refine layers)
 75ad8ff	308.81	keep	exp5: minimize stream phase (4 stream + 11 refine layers)
+dab0d77	307.85	keep	exp6: near-minimal stream phase (2 stream + 13 refine layers)
