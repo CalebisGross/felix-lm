@@ -21,9 +21,9 @@ class FelixV2Config:
     num_streams: int = 4
     num_layers: int = 0
     num_heads: int = 2  # head_dim = d_stream // num_heads = 32
-    num_refine_layers: int = 20
+    num_refine_layers: int = 15
     num_refine_heads: int = 4  # head_dim = d_embed // num_refine_heads = 32
-    ffn_mult: int = 3
+    ffn_mult: int = 4
     attention_type: str = "full_causal"
     # Per-layer attention schedule. If non-empty, overrides attention_type.
     # Must be length num_layers. e.g. ["linear"]*4 + ["sliding_window"]*4 + ["full_causal"]*5
