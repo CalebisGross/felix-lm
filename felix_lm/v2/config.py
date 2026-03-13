@@ -40,7 +40,7 @@ class FelixV2Config:
     # RoPE
     rope_base: float = 10000.0
     rope_helical_turns: int = 2
-    rope_depth_alpha: float = 0.0
+    rope_depth_alpha: float = 1.0
 
     # Training
     tie_embeddings: bool = True
