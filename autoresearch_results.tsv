@@ -35,3 +35,4 @@ ca74786	87.47	discard	exp30: weight_decay=0.2 at LR 8e-3 (overshoot, 0.1 is peak
 db3a12e	74.97	discard	exp32: LR 1.2e-2 + wd=0.1 (slightly worse, LR 1e-2 is peak)
 79e971a	76.14	discard	exp33: 22 refine layers + LR 1e-2 + wd=0.1 (deeper hurts, 12.25M params)
 f1af13b	75.66	discard	exp34: dropout=0.05 + LR 1e-2 + wd=0.1 (dropout redundant with wd)
+45a7eb3	77.05	discard	exp35: 24L ffn3 + LR 1e-2 + wd=0.1 (deeper+narrower worse than 20L ffn4)
