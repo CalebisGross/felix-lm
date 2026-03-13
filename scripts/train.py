@@ -181,7 +181,10 @@ def train(config: FelixConfig, args):
 
     # Optimizer
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.95)
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        betas=(args.beta1, args.beta2),
     )
 
     # Training params
@@ -487,6 +490,10 @@ def main():
             "m2_tcg",
             "felix_v2",
             "felix_v2_hetero",
+            "felix_v2_smallpost",
+            "felix_v2_3refine",
+            "felix_v2_12L3R",
+            "felix_v2_11L4R",
         ],
         help="Model config",
     )
@@ -505,6 +512,8 @@ def main():
     )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
+    parser.add_argument("--beta1", type=float, default=0.9)
+    parser.add_argument("--beta2", type=float, default=0.95)
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-interval", type=int, default=10)
@@ -580,6 +589,10 @@ def main():
         "felix_v2_hetero": lambda: FelixV2Config(
             attention_schedule=(["linear"] * 4 + ["sliding_window"] * 4 + ["full_causal"] * 5),
         ),
+        "felix_v2_smallpost": lambda: FelixV2Config(d_post=32),
+        "felix_v2_3refine": lambda: FelixV2Config(d_post=32, num_refine_layers=3),
+        "felix_v2_12L3R": lambda: FelixV2Config(num_layers=12, num_refine_layers=3),
+        "felix_v2_11L4R": lambda: FelixV2Config(num_layers=11, num_refine_layers=4),
     }
     config = configs[args.config]()
 
