@@ -37,3 +37,4 @@ db3a12e	74.97	discard	exp32: LR 1.2e-2 + wd=0.1 (slightly worse, LR 1e-2 is peak
 f1af13b	75.66	discard	exp34: dropout=0.05 + LR 1e-2 + wd=0.1 (dropout redundant with wd)
 45a7eb3	77.05	discard	exp35: 24L ffn3 + LR 1e-2 + wd=0.1 (deeper+narrower worse than 20L ffn4)
 3699bd9	70.75	keep	exp36: beta2=0.98 + LR 1e-2 + wd=0.1 (NEW BEST! -3.16 from optimizer)
+975765c	65.98	keep	exp37: beta2=0.99 + LR 1e-2 + wd=0.1 (NEW BEST! -4.77, still climbing)
