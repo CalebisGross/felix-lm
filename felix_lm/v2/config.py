@@ -14,14 +14,14 @@ class FelixV2Config:
     # Dimensions
     vocab_size: int = 50257
     d_embed: int = 128
-    d_stream: int = 128
+    d_stream: int = 64
     d_post: int = 64
 
     # Architecture
-    num_streams: int = 2
-    num_layers: int = 2
-    num_heads: int = 4  # head_dim = d_stream // num_heads = 32
-    num_refine_layers: int = 11
+    num_streams: int = 4
+    num_layers: int = 0
+    num_heads: int = 2  # head_dim = d_stream // num_heads = 32
+    num_refine_layers: int = 15
     num_refine_heads: int = 4  # head_dim = d_embed // num_refine_heads = 32
     ffn_mult: int = 4
     attention_type: str = "full_causal"
