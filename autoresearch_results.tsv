@@ -39,3 +39,4 @@ f1af13b	75.66	discard	exp34: dropout=0.05 + LR 1e-2 + wd=0.1 (dropout redundant 
 3699bd9	70.75	keep	exp36: beta2=0.98 + LR 1e-2 + wd=0.1 (NEW BEST! -3.16 from optimizer)
 975765c	65.98	keep	exp37: beta2=0.99 + LR 1e-2 + wd=0.1 (NEW BEST! -4.77, still climbing)
 8d7d4bc	68.83	discard	exp38: beta2=0.999 + LR 1e-2 + wd=0.1 (overshoot, 0.99 is peak)
+1ffd6d6	62.69	keep	exp39: LR 1.2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! beta2 stabilizes higher LR)
