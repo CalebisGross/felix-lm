@@ -14,7 +14,7 @@ class FelixV2Config:
     # Dimensions
     vocab_size: int = 50257
     d_embed: int = 128
-    d_stream: int = 128
+    d_stream: int = 64
     d_post: int = 64
 
     # Architecture
