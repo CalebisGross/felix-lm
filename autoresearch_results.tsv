@@ -72,3 +72,4 @@ e4d44b1	47.38	discard	exp66: v2_add1_open (merge_bias=1.0) — gap: +2.57, sligh
 6c84af6	39.47	keep	exp69: v2_baseline at 5000 steps — matched comparison
 5041062	38.85	keep	exp70: v2_add1_open at 10000 steps — gap +1.65 (widened from +0.76 at 5K)
 5041062	37.20	keep	exp71: v2_baseline at 10000 steps — matched comparison
+e426cea	47.09	discard	exp72: v2_light1 (light Felix 1+20, d64, 2s) — gap: +2.28, best Felix 2.5K
