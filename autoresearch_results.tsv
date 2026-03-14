@@ -58,3 +58,4 @@ a2d6448	46.92	discard	exp52: rope_turns=0 (standard RoPE slightly worse, helical
 4f0ee29	45.45	discard	exp55: min_lr_ratio=0.01 (identical to 0.1 at 2500 steps, floor doesn't matter)
 c6446f9	126.57	discard	exp56: label_smoothing=0.1 (inflated PPL, unfair — eval uses smoothed loss)
 97e1eda	59.16	discard	exp57: seq_len=256 (not comparable, different eval context length)
+1ccca4d	44.81	keep	exp58: torch.compile (NEW BEST! 2.2x faster + slightly better numerics)
