@@ -511,6 +511,8 @@ def main():
             "v2_add2",
             "v2_add1_open",
             "v2_add1_wide",
+            "v2_light1",
+            "v2_light2",
         ],
         help="Model config",
     )
@@ -685,6 +687,23 @@ def main():
             num_heads=2,
             d_post=32,
             merge_bias_init=1.0,
+        ),
+        # Lightweight Felix: minimal overhead cross-stream exchange
+        "v2_light1": lambda: FelixV2Config(
+            num_layers=1,
+            num_refine_layers=20,
+            d_stream=64,
+            num_streams=2,
+            num_heads=2,
+            light_felix=True,
+        ),
+        "v2_light2": lambda: FelixV2Config(
+            num_layers=2,
+            num_refine_layers=20,
+            d_stream=64,
+            num_streams=2,
+            num_heads=2,
+            light_felix=True,
         ),
         # Additive wide: stream at d128, no bottleneck, merge bias=1.0
         "v2_add1_wide": lambda: FelixV2Config(

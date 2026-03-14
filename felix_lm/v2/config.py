@@ -29,6 +29,7 @@ class FelixV2Config:
     # Must be length num_layers. e.g. ["linear"]*4 + ["sliding_window"]*4 + ["full_causal"]*5
     attention_schedule: list[str] = field(default_factory=list)
     shared_stream_weights: bool = False  # All streams share one transformer block
+    light_felix: bool = False  # Use lightweight cross-stream exchange (no CentralPost)
 
     # CentralPost
     cp_read_gated: bool = True

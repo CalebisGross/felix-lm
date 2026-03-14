@@ -23,6 +23,7 @@ from felix_lm.rope import build_rope_cache
 from felix_lm.transformer_block import RMSNorm, TransformerBlock
 from felix_lm.v2.config import FelixV2Config
 from felix_lm.v2.felix_layer import FelixV2Layer
+from felix_lm.v2.light_felix_layer import LightFelixLayer
 
 
 class FelixLMv2(nn.Module):
@@ -37,29 +38,49 @@ class FelixLMv2(nn.Module):
             config.vocab_size, config.d_embed, config.num_streams, config.d_stream
         )
 
-        # 2. Uniform Felix layers
-        self.layers = nn.ModuleList(
-            [
-                FelixV2Layer(
-                    d_stream=config.d_stream,
-                    d_post=config.d_post,
-                    num_streams=config.num_streams,
-                    num_heads=config.num_heads,
-                    attention_type=config.get_attention_type(i),
-                    ffn_mult=config.ffn_mult,
-                    layer_idx=i,
-                    total_layers=config.total_layers,
-                    rope_base=config.rope_base,
-                    rope_helical_turns=config.rope_helical_turns,
-                    rope_depth_alpha=config.rope_depth_alpha,
-                    merge_temp_init=config.merge_temp_init,
-                    merge_bias_init=config.merge_bias_init,
-                    dropout=config.dropout,
-                    shared_stream_weights=config.shared_stream_weights,
-                )
-                for i in range(config.num_layers)
-            ]
-        )
+        # 2. Felix layers (standard or lightweight)
+        if config.light_felix:
+            self.layers = nn.ModuleList(
+                [
+                    LightFelixLayer(
+                        d_stream=config.d_stream,
+                        num_streams=config.num_streams,
+                        num_heads=config.num_heads,
+                        attention_type=config.get_attention_type(i),
+                        ffn_mult=config.ffn_mult,
+                        layer_idx=i,
+                        total_layers=config.total_layers,
+                        rope_base=config.rope_base,
+                        rope_helical_turns=config.rope_helical_turns,
+                        rope_depth_alpha=config.rope_depth_alpha,
+                        dropout=config.dropout,
+                    )
+                    for i in range(config.num_layers)
+                ]
+            )
+        else:
+            self.layers = nn.ModuleList(
+                [
+                    FelixV2Layer(
+                        d_stream=config.d_stream,
+                        d_post=config.d_post,
+                        num_streams=config.num_streams,
+                        num_heads=config.num_heads,
+                        attention_type=config.get_attention_type(i),
+                        ffn_mult=config.ffn_mult,
+                        layer_idx=i,
+                        total_layers=config.total_layers,
+                        rope_base=config.rope_base,
+                        rope_helical_turns=config.rope_helical_turns,
+                        rope_depth_alpha=config.rope_depth_alpha,
+                        merge_temp_init=config.merge_temp_init,
+                        merge_bias_init=config.merge_bias_init,
+                        dropout=config.dropout,
+                        shared_stream_weights=config.shared_stream_weights,
+                    )
+                    for i in range(config.num_layers)
+                ]
+            )
 
         # 3. Stream aggregation: learned weights over streams
         self.stream_weights = nn.Parameter(torch.ones(config.num_streams))
@@ -126,28 +147,33 @@ class FelixLMv2(nn.Module):
         # Embedding + stream init
         embeddings, streams = self.stream_init(token_ids)
 
-        # Initialize CentralPost to zeros
-        central_post = torch.zeros(
-            B,
-            T,
-            config.d_post,
-            device=token_ids.device,
-            dtype=streams[0].dtype,
-        )
-
         # Process through Felix layers
         agreements = []
         merge_strengths = []
         use_ckpt = config.gradient_checkpointing and self.training
-        for layer in self.layers:
-            if use_ckpt:
-                streams, central_post, agreement, strength = self._checkpointed_layer(
-                    layer, streams, central_post
-                )
-            else:
-                streams, central_post, agreement, strength = layer(streams, central_post)
-            agreements.append(agreement.mean().detach())
-            merge_strengths.append(strength.mean().detach())
+
+        if config.light_felix:
+            for layer in self.layers:
+                streams, agreement, strength = layer(streams)
+                agreements.append(agreement.mean().detach())
+                merge_strengths.append(strength.detach())
+        else:
+            central_post = torch.zeros(
+                B,
+                T,
+                config.d_post,
+                device=token_ids.device,
+                dtype=streams[0].dtype,
+            )
+            for layer in self.layers:
+                if use_ckpt:
+                    streams, central_post, agreement, strength = self._checkpointed_layer(
+                        layer, streams, central_post
+                    )
+                else:
+                    streams, central_post, agreement, strength = layer(streams, central_post)
+                agreements.append(agreement.mean().detach())
+                merge_strengths.append(strength.mean().detach())
 
         # Aggregate streams with learned weights
         weights = F.softmax(self.stream_weights, dim=0)  # [N]
