@@ -55,3 +55,4 @@ ec674e4	59.17	keep	exp41: LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! gains narrowi
 a2d6448	46.92	discard	exp52: rope_turns=0 (standard RoPE slightly worse, helical helps ~0.9 PPL)
 594ef56	45.43	keep	exp53: d_stream=128 (no bottleneck, NEW BEST at grad_accum=8)
 630549a	49.99	discard	exp54: beta1=0.85 (less momentum worse, 0.9 optimal)
+4f0ee29	45.45	discard	exp55: min_lr_ratio=0.01 (identical to 0.1 at 2500 steps, floor doesn't matter)

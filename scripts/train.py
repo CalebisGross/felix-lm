@@ -282,7 +282,13 @@ def train(config: FelixConfig, args):
             # Optimizer step after accumulation
             if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
                 # Learning rate schedule
-                lr = get_lr(global_step, args.warmup_steps, max_steps, args.lr, args.lr * 0.1)
+                lr = get_lr(
+                    global_step,
+                    args.warmup_steps,
+                    max_steps,
+                    args.lr,
+                    args.lr * args.min_lr_ratio,
+                )
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr
 
@@ -515,6 +521,7 @@ def main():
     parser.add_argument("--beta1", type=float, default=0.9)
     parser.add_argument("--beta2", type=float, default=0.95)
     parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--min-lr-ratio", type=float, default=0.1, help="min_lr = lr * ratio")
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--eval-interval", type=int, default=500)
