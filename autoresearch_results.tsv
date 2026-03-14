@@ -70,3 +70,5 @@ e4d44b1	47.38	discard	exp66: v2_add1_open (merge_bias=1.0) — gap: +2.57, sligh
 47275d5	49.13	discard	exp67: v2_add1_wide (d128 streams + 20 refine) — wider streams worse (+4.32)
 6c84af6	40.23	keep	exp68: v2_add1_open at 5000 steps — gap narrowing! (40.23 vs 39.47 baseline)
 6c84af6	39.47	keep	exp69: v2_baseline at 5000 steps — matched comparison
+5041062	38.85	keep	exp70: v2_add1_open at 10000 steps — gap +1.65 (widened from +0.76 at 5K)
+5041062	37.20	keep	exp71: v2_baseline at 10000 steps — matched comparison
