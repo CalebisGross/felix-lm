@@ -523,6 +523,7 @@ def main():
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument("--min-lr-ratio", type=float, default=0.1, help="min_lr = lr * ratio")
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--save-interval", type=int, default=1000)
@@ -607,6 +608,10 @@ def main():
     if args.rope_turns is not None:
         config.rope_helical_turns = args.rope_turns
         print(f"  Override: rope_helical_turns = {args.rope_turns}")
+
+    if args.label_smoothing > 0 and isinstance(config, FelixV2Config):
+        config.label_smoothing = args.label_smoothing
+        print(f"  Override: label_smoothing = {args.label_smoothing}")
 
     if args.supervision_off_after > 0 and not isinstance(config, FelixV2Config):
         # Ensure supervision starts ON for curriculum training

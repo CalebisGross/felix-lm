@@ -45,6 +45,7 @@ class FelixV2Config:
     # Training
     tie_embeddings: bool = True
     dropout: float = 0.0
+    label_smoothing: float = 0.0
     gradient_checkpointing: bool = False
 
     def get_attention_type(self, layer_idx: int) -> str:

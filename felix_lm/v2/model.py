@@ -189,6 +189,7 @@ class FelixLMv2(nn.Module):
                 logits.view(-1, config.vocab_size),
                 targets.view(-1),
                 reduction="mean",
+                label_smoothing=config.label_smoothing,
             )
             result["loss"] = loss
 
