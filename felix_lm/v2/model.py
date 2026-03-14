@@ -55,6 +55,7 @@ class FelixLMv2(nn.Module):
                     merge_temp_init=config.merge_temp_init,
                     merge_bias_init=config.merge_bias_init,
                     dropout=config.dropout,
+                    shared_stream_weights=config.shared_stream_weights,
                 )
                 for i in range(config.num_layers)
             ]

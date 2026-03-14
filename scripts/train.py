@@ -503,6 +503,9 @@ def main():
             "v2_baseline",
             "v2_stream2",
             "v2_stream4",
+            "v2_shared2",
+            "v2_shared4",
+            "v2_shared6",
         ],
         help="Model config",
     )
@@ -619,6 +622,28 @@ def main():
             num_layers=4,
             num_refine_layers=16,
             d_stream=64,
+        ),
+        # Shared-weight stream configs (Felix identity with low overhead)
+        "v2_shared2": lambda: FelixV2Config(
+            num_layers=2,
+            num_refine_layers=18,
+            d_stream=128,
+            num_heads=4,
+            shared_stream_weights=True,
+        ),
+        "v2_shared4": lambda: FelixV2Config(
+            num_layers=4,
+            num_refine_layers=16,
+            d_stream=128,
+            num_heads=4,
+            shared_stream_weights=True,
+        ),
+        "v2_shared6": lambda: FelixV2Config(
+            num_layers=6,
+            num_refine_layers=14,
+            d_stream=128,
+            num_heads=4,
+            shared_stream_weights=True,
         ),
     }
     config = configs[args.config]()

@@ -28,6 +28,7 @@ class FelixV2Config:
     # Per-layer attention schedule. If non-empty, overrides attention_type.
     # Must be length num_layers. e.g. ["linear"]*4 + ["sliding_window"]*4 + ["full_causal"]*5
     attention_schedule: list[str] = field(default_factory=list)
+    shared_stream_weights: bool = False  # All streams share one transformer block
 
     # CentralPost
     cp_read_gated: bool = True
@@ -74,7 +75,7 @@ class FelixV2Config:
         block_params = 4 * ds * ds + 3 * ds * (ds * fm)
         # Plus 2 RMSNorm weights
         block_params += 2 * ds
-        stream_layers = N * L * block_params
+        stream_layers = (1 if self.shared_stream_weights else N) * L * block_params
 
         # CentralPost per layer: N * (read_proj + read_gate + write_proj + write_gate) + norm
         cp_per_layer = N * (dp * ds + ds + 1 + ds * dp + ds + 1) + dp

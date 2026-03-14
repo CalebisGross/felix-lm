@@ -34,29 +34,43 @@ class FelixV2Layer(nn.Module):
         merge_temp_init: float,
         merge_bias_init: float,
         dropout: float = 0.0,
+        shared_stream_weights: bool = False,
     ):
         super().__init__()
         self.layer_idx = layer_idx
         self.total_layers = total_layers
         self.d_stream = d_stream
+        self.num_streams = num_streams
         self.num_heads = num_heads
         self.rope_base = rope_base
         self.rope_helical_turns = rope_helical_turns
         self.rope_depth_alpha = rope_depth_alpha
+        self.shared_stream_weights = shared_stream_weights
 
-        # Independent transformer block per stream
-        self.stream_blocks = nn.ModuleList(
-            [
-                TransformerBlock(
-                    dim=d_stream,
-                    num_heads=num_heads,
-                    attention_type=attention_type,
-                    ffn_mult=ffn_mult,
-                    dropout=dropout,
-                )
-                for _ in range(num_streams)
-            ]
-        )
+        # Transformer block(s) for stream processing
+        if shared_stream_weights:
+            # One shared block applied to all streams
+            self.shared_block = TransformerBlock(
+                dim=d_stream,
+                num_heads=num_heads,
+                attention_type=attention_type,
+                ffn_mult=ffn_mult,
+                dropout=dropout,
+            )
+        else:
+            # Independent transformer block per stream
+            self.stream_blocks = nn.ModuleList(
+                [
+                    TransformerBlock(
+                        dim=d_stream,
+                        num_heads=num_heads,
+                        attention_type=attention_type,
+                        ffn_mult=ffn_mult,
+                        dropout=dropout,
+                    )
+                    for _ in range(num_streams)
+                ]
+            )
 
         # CentralPost communication
         self.central_post = CentralPostLayer(d_stream, d_post, num_streams)
@@ -95,8 +109,13 @@ class FelixV2Layer(nn.Module):
             device=streams[0].device,
         )
 
-        # 1. Independent transformer processing
-        processed = [block(stream, cos, sin) for block, stream in zip(self.stream_blocks, streams)]
+        # 1. Transformer processing per stream
+        if self.shared_stream_weights:
+            processed = [self.shared_block(stream, cos, sin) for stream in streams]
+        else:
+            processed = [
+                block(stream, cos, sin) for block, stream in zip(self.stream_blocks, streams)
+            ]
 
         # 2. CentralPost communication
         processed, central_post = self.central_post(processed, central_post)
