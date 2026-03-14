@@ -507,6 +507,8 @@ def main():
             "v2_shared4",
             "v2_shared6",
             "v2_2s_d128",
+            "v2_add1",
+            "v2_add2",
         ],
         help="Model config",
     )
@@ -653,6 +655,23 @@ def main():
             d_stream=128,
             num_streams=2,
             num_heads=4,
+            d_post=32,
+        ),
+        # Additive: stream phase ON TOP of full refine (not replacing)
+        "v2_add1": lambda: FelixV2Config(
+            num_layers=1,
+            num_refine_layers=20,
+            d_stream=64,
+            num_streams=2,
+            num_heads=2,
+            d_post=32,
+        ),
+        "v2_add2": lambda: FelixV2Config(
+            num_layers=2,
+            num_refine_layers=20,
+            d_stream=64,
+            num_streams=2,
+            num_heads=2,
             d_post=32,
         ),
     }
