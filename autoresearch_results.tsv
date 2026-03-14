@@ -76,3 +76,6 @@ e426cea	47.09	discard	exp72: v2_light1 (light Felix 1+20, d64, 2s) — gap: +2.2
 aef51d4	72.88	keep	exp73: v2_100m_base (0+20 d512, 111M) — 100M baseline
 aef51d4	71.94	keep	exp74: v2_100m_felix (2+19 d256, 110M) — FELIX BEATS BASELINE AT 100M! -0.94
 aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive neutral (+0.12)
+543ce25	261.22	discard	exp76: v2_100m_felix_4s at LR 3e-3 — destabilized (too high LR for 4 stream)
+543ce25	79.81	discard	exp77: v2_100m_felix_4s at LR 1e-3 — underfit
+543ce25	67.39	keep	exp78: v2_100m_felix_4s at LR 2e-3 — NEW BEST 100M! -5.49 vs baseline!
