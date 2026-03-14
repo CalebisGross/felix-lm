@@ -64,3 +64,5 @@ c6446f9	126.57	discard	exp56: label_smoothing=0.1 (inflated PPL, unfair — eval
 -	50.86	discard	exp61: v2_stream4 (4 stream + 16 refine, d64) — streams cost +5.97 PPL
 1352925	59.57	discard	exp62: v2_shared2 (shared weights 2+18, d128) — worse than independent, no diversity
 1ec91c0	50.94	discard	exp63: v2_2s_d128 (2 indep streams d128 + 18 refine) — gap: +6.13 PPL
+4530b68	47.56	discard	exp64: v2_add1 (1 stream + 20 refine, additive) — gap: +2.75 PPL
+4530b68	48.44	discard	exp65: v2_add2 (2 stream + 20 refine, additive) — gap: +3.63 PPL
