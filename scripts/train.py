@@ -509,6 +509,7 @@ def main():
             "v2_2s_d128",
             "v2_add1",
             "v2_add2",
+            "v2_add1_open",
         ],
         help="Model config",
     )
@@ -673,6 +674,16 @@ def main():
             num_streams=2,
             num_heads=2,
             d_post=32,
+        ),
+        # Additive with merge bias=1.0 (start mostly-merged, per v1 gate principle)
+        "v2_add1_open": lambda: FelixV2Config(
+            num_layers=1,
+            num_refine_layers=20,
+            d_stream=64,
+            num_streams=2,
+            num_heads=2,
+            d_post=32,
+            merge_bias_init=1.0,
         ),
     }
     config = configs[args.config]()
