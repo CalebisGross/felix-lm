@@ -53,3 +53,4 @@ ec674e4	59.17	keep	exp41: LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! gains narrowi
 027bab1	47.54	keep	exp50: grad_accum=4 at 5000 steps (matched data: 47.54 vs 46.01, batch size helps)
 659f9b3	47.94	discard	exp51: LR 2.5e-2 at grad_accum=8 (worse, LR 2e-2 still optimal)
 a2d6448	46.92	discard	exp52: rope_turns=0 (standard RoPE slightly worse, helical helps ~0.9 PPL)
+594ef56	45.43	keep	exp53: d_stream=128 (no bottleneck, NEW BEST at grad_accum=8)
