@@ -37,7 +37,10 @@ def main():
         model = FelixLMv2(config).to(device)
     else:
         model = FelixLM(config).to(device)
-    model.load_state_dict(ckpt["model"])
+    # Strip _orig_mod. prefix from torch.compile checkpoints
+    state_dict = ckpt["model"]
+    state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+    model.load_state_dict(state_dict)
     model.eval()
 
     n_params = count_parameters(model)

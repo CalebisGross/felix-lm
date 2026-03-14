@@ -59,3 +59,6 @@ a2d6448	46.92	discard	exp52: rope_turns=0 (standard RoPE slightly worse, helical
 c6446f9	126.57	discard	exp56: label_smoothing=0.1 (inflated PPL, unfair — eval uses smoothed loss)
 97e1eda	59.16	discard	exp57: seq_len=256 (not comparable, different eval context length)
 1ccca4d	44.81	keep	exp58: torch.compile (NEW BEST! 2.2x faster + slightly better numerics)
+-	44.89	keep	exp59: v2_baseline (0+20 refine, d128) — reproduces exp58 baseline
+-	49.03	discard	exp60: v2_stream2 (2 stream + 18 refine, d64) — streams cost +4.14 PPL
+-	50.86	discard	exp61: v2_stream4 (4 stream + 16 refine, d64) — streams cost +5.97 PPL

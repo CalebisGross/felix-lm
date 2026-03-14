@@ -500,6 +500,9 @@ def main():
             "felix_v2_3refine",
             "felix_v2_12L3R",
             "felix_v2_11L4R",
+            "v2_baseline",
+            "v2_stream2",
+            "v2_stream4",
         ],
         help="Model config",
     )
@@ -601,6 +604,22 @@ def main():
         "felix_v2_3refine": lambda: FelixV2Config(d_post=32, num_refine_layers=3),
         "felix_v2_12L3R": lambda: FelixV2Config(num_layers=12, num_refine_layers=3),
         "felix_v2_11L4R": lambda: FelixV2Config(num_layers=11, num_refine_layers=4),
+        # Stream ablation configs (param-matched ~11.8M, optimal hyperparams)
+        "v2_baseline": lambda: FelixV2Config(
+            num_layers=0,
+            num_refine_layers=20,
+            d_stream=128,
+        ),
+        "v2_stream2": lambda: FelixV2Config(
+            num_layers=2,
+            num_refine_layers=18,
+            d_stream=64,
+        ),
+        "v2_stream4": lambda: FelixV2Config(
+            num_layers=4,
+            num_refine_layers=16,
+            d_stream=64,
+        ),
     }
     config = configs[args.config]()
 
