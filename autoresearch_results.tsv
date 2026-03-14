@@ -45,3 +45,4 @@ ec674e4	59.17	keep	exp41: LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! gains narrowi
 733981d	69.98	discard	exp42: LR 3e-2 + beta2=0.99 + wd=0.1 (overshoot, 2e-2 near peak)
 7a2e2b8	60.68	discard	exp43: LR 2.5e-2 + beta2=0.99 + wd=0.1 (slightly worse, 2e-2 confirmed peak)
 9501087	62.33	discard	exp44: 8 refine heads + LR 2e-2 + beta2=0.99 + wd=0.1 (worse + slower)
+6416f31	58.21	keep	exp45: warmup=500 + LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! longer warmup helps)
