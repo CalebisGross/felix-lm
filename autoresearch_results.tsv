@@ -67,3 +67,4 @@ c6446f9	126.57	discard	exp56: label_smoothing=0.1 (inflated PPL, unfair — eval
 4530b68	47.56	discard	exp64: v2_add1 (1 stream + 20 refine, additive) — gap: +2.75 PPL
 4530b68	48.44	discard	exp65: v2_add2 (2 stream + 20 refine, additive) — gap: +3.63 PPL
 e4d44b1	47.38	discard	exp66: v2_add1_open (merge_bias=1.0) — gap: +2.57, slightly better
+47275d5	49.13	discard	exp67: v2_add1_wide (d128 streams + 20 refine) — wider streams worse (+4.32)
