@@ -506,6 +506,7 @@ def main():
             "v2_shared2",
             "v2_shared4",
             "v2_shared6",
+            "v2_2s_d128",
         ],
         help="Model config",
     )
@@ -644,6 +645,15 @@ def main():
             d_stream=128,
             num_heads=4,
             shared_stream_weights=True,
+        ),
+        # 2-stream independent at full width (d128)
+        "v2_2s_d128": lambda: FelixV2Config(
+            num_layers=2,
+            num_refine_layers=18,
+            d_stream=128,
+            num_streams=2,
+            num_heads=4,
+            d_post=32,
         ),
     }
     config = configs[args.config]()
