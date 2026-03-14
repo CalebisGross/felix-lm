@@ -47,3 +47,5 @@ ec674e4	59.17	keep	exp41: LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! gains narrowi
 9501087	62.33	discard	exp44: 8 refine heads + LR 2e-2 + beta2=0.99 + wd=0.1 (worse + slower)
 6416f31	58.21	keep	exp45: warmup=500 + LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! longer warmup helps)
 704e1c4	58.93	discard	exp46: warmup=750 (too much warmup, 500 is peak)
+04042bc	59.13	discard	exp47: grad_clip=0.5 (tighter clip worse)
+04042bc	60.93	discard	exp48: grad_clip=2.0 (looser clip worse, 1.0 is peak)
