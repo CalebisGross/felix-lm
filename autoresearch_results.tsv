@@ -51,3 +51,4 @@ ec674e4	59.17	keep	exp41: LR 2e-2 + beta2=0.99 + wd=0.1 (NEW BEST! gains narrowi
 04042bc	60.93	discard	exp48: grad_clip=2.0 (looser clip worse, 1.0 is peak)
 0acb7cd	46.01	keep	exp49: grad_accum=8 (eff batch 64) — 46.01 PPL but 2x data (unfair, 2x tokens)
 027bab1	47.54	keep	exp50: grad_accum=4 at 5000 steps (matched data: 47.54 vs 46.01, batch size helps)
+659f9b3	47.94	discard	exp51: LR 2.5e-2 at grad_accum=8 (worse, LR 2e-2 still optimal)
