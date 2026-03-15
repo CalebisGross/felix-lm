@@ -82,3 +82,4 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 0751c27	67.69	discard	exp79: v2_100m_felix_6s at LR 2e-3 — plateau, 4 layers enough
 0751c27	67.81	discard	exp80: v2_100m_felix_4str (4 streams) at LR 2e-3 — 2 streams sufficient
 1bbf480	61.37	keep	exp81: v2_100m_base at LR 2e-3 — BASELINE ALSO IMPROVES! Felix win was LR artifact
+2590c74	70.16	discard	exp82: v2_100m_felix_4s at LR 1.5e-3 — 2e-3 confirmed optimal for Felix
