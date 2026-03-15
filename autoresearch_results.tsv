@@ -79,3 +79,5 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 543ce25	261.22	discard	exp76: v2_100m_felix_4s at LR 3e-3 — destabilized (too high LR for 4 stream)
 543ce25	79.81	discard	exp77: v2_100m_felix_4s at LR 1e-3 — underfit
 543ce25	67.39	keep	exp78: v2_100m_felix_4s at LR 2e-3 — NEW BEST 100M! -5.49 vs baseline!
+0751c27	67.69	discard	exp79: v2_100m_felix_6s at LR 2e-3 — plateau, 4 layers enough
+0751c27	67.81	discard	exp80: v2_100m_felix_4str (4 streams) at LR 2e-3 — 2 streams sufficient
