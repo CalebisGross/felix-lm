@@ -557,6 +557,8 @@ def main():
             "v3_8spoke",
             "v3_r64",
             "v3_deep22",
+            "v3_100m_none",
+            "v3_100m_r32",
         ],
         help="Model config",
     )
@@ -881,6 +883,21 @@ def main():
         "v3_deep22": lambda: FelixV3Config(
             num_layers=22,
             gate_schedule="none",
+        ),
+        # --- 100M scale configs ---
+        "v3_100m_none": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            gate_schedule="none",
+        ),
+        "v3_100m_r32": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=32,
+            gate_schedule="uniform",
         ),
     }
     config = configs[args.config]()
