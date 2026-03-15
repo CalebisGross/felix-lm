@@ -5,13 +5,17 @@ Usage:
     python scripts/train.py --config m0_uniform      # Train M0 baseline
     python scripts/train.py --device cpu             # CPU training (slow)
     python scripts/train.py --no-wandb               # Disable wandb logging
+    python scripts/train.py --max-time 600           # Fixed wall-clock budget (seconds)
 """
 
 import argparse
+import gc
 import math
+import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -133,6 +137,10 @@ def train(config: FelixConfig, args):
     if device.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
+    # Build BPB lookup table (once, before model)
+    print("Building bytes-per-token table for BPB...")
+    bytes_per_token = build_bytes_per_token()
+
     # Model
     if isinstance(config, FelixV3Config):
         model = FelixLMv3(config).to(device)
@@ -194,27 +202,39 @@ def train(config: FelixConfig, args):
     )
 
     # Optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        betas=(args.beta1, args.beta2),
-    )
+    if args.optimizer == "muon_adamw":
+        from felix_lm.optim import build_optimizer
+
+        optimizer = build_optimizer(model, args)
+    else:
+        optimizer = torch.optim.AdamW(
+            [{"params": list(model.parameters()), "lr": args.lr, "base_lr": args.lr}],
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(args.beta1, args.beta2),
+        )
 
     # Training params
     steps_per_epoch = len(train_loader) // args.grad_accum
+    use_wall_clock = args.max_time is not None
     if args.max_steps:
         max_steps = args.max_steps
         # Cap warmup at 10% of max_steps for short runs
         if args.warmup_steps > max_steps // 10:
             args.warmup_steps = max(1, max_steps // 10)
             print(f"  Scaled warmup to {args.warmup_steps} steps for short run")
+    elif use_wall_clock:
+        # With wall-clock budget, set max_steps very high (loop exits on time)
+        max_steps = 999_999
     else:
         max_steps = args.epochs * steps_per_epoch
     ga = args.grad_accum
     print(f"\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch")
-    print(f"  grad_accum={ga}, {max_steps} total steps")
-    print(f"  Effective batch size: {args.batch_size * args.grad_accum}")
+    if use_wall_clock:
+        print(f"  Wall-clock budget: {args.max_time}s (steps unlimited)")
+    else:
+        print(f"  max_steps={max_steps}")
+    print(f"  grad_accum={ga}, effective batch size: {args.batch_size * args.grad_accum}")
 
     # Wandb
     if args.use_wandb:
@@ -265,8 +285,16 @@ def train(config: FelixConfig, args):
     # Training loop
     global_step = 0
     best_val_ppl = float("inf")
+    best_val_bpb = float("inf")
     ckpt_dir = Path(args.checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compile warmup: first N steps don't count toward wall-clock budget.
+    # torch.compile JITs kernels on first few forward/backward passes.
+    compile_warmup_steps = 11 if args.compile else 0
+    warmup_done = not args.compile  # skip warmup tracking if not compiling
+    train_start_time = None  # set after compile warmup
+    time_budget_exhausted = False
 
     for epoch in range(args.epochs):
         model.train()
@@ -307,21 +335,39 @@ def train(config: FelixConfig, args):
                     args.lr,
                     args.lr * args.min_lr_ratio,
                 )
+                schedule_mult = lr / args.lr if args.lr > 0 else 1.0
                 for pg in optimizer.param_groups:
-                    pg["lr"] = lr
+                    base = pg.get("base_lr", args.lr)
+                    pg["lr"] = base * schedule_mult
 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 optimizer.step()
                 optimizer.zero_grad()
 
                 avg_accum_loss = accum_loss / accum_steps
+                elapsed = f"{time.time() - train_start_time:.0f}s" if train_start_time else "warmup"
                 pbar.set_postfix(
                     loss=f"{avg_accum_loss:.3f}",
                     ppl=f"{math.exp(min(avg_accum_loss, 20)):.1f}",
                     lr=f"{lr:.2e}",
+                    t=elapsed,
                 )
                 accum_loss = 0.0
                 global_step += 1
+
+                # Compile warmup: start the clock after JIT is done
+                if not warmup_done and global_step >= compile_warmup_steps:
+                    warmup_done = True
+                    train_start_time = time.time()
+                    # GC freeze: shut off Python's garbage collector to avoid
+                    # ~500ms stalls during training. Manual collect every 5000 steps.
+                    gc.collect()
+                    gc.freeze()
+                    gc.disable()
+                    print(
+                        f"\n  Compile warmup done ({compile_warmup_steps} steps)."
+                        " Clock started. GC frozen."
+                    )
 
                 # v1-only training schedules
                 if not isinstance(config, (FelixV2Config, FelixV3Config)):
@@ -401,18 +447,36 @@ def train(config: FelixConfig, args):
 
                     wandb.log(log_dict, step=global_step)
 
+                # Periodic GC (every 5000 steps) to prevent memory buildup
+                if global_step % 5000 == 0 and global_step > 0 and warmup_done:
+                    gc.enable()
+                    gc.collect()
+                    gc.freeze()
+                    gc.disable()
+
                 # Validation
                 if global_step % args.eval_interval == 0:
-                    val_ppl = evaluate(model, val_loader, device)
-                    print(f"\n  Step {global_step}: val_ppl = {val_ppl:.2f}")
+                    val_result = evaluate(model, val_loader, device, bytes_per_token)
+                    val_ppl = val_result["ppl"]
+                    val_bpb = val_result.get("bpb")
+                    elapsed_str = (
+                        f" [{time.time() - train_start_time:.0f}s]" if train_start_time else ""
+                    )
+                    bpb_str = f", bpb = {val_bpb:.4f}" if val_bpb else ""
+                    print(f"\n  Step {global_step}: val_ppl = {val_ppl:.2f}{bpb_str}{elapsed_str}")
 
                     if args.use_wandb:
                         import wandb
 
-                        wandb.log({"val/ppl": val_ppl}, step=global_step)
+                        log = {"val/ppl": val_ppl}
+                        if val_bpb:
+                            log["val/bpb"] = val_bpb
+                        wandb.log(log, step=global_step)
 
                     if val_ppl < best_val_ppl:
                         best_val_ppl = val_ppl
+                        if val_bpb:
+                            best_val_bpb = val_bpb
                         torch.save(
                             {"model": model.state_dict(), "config": config, "step": global_step},
                             ckpt_dir / "best.pt",
@@ -428,35 +492,88 @@ def train(config: FelixConfig, args):
                         ckpt_dir / f"step_{global_step}.pt",
                     )
 
-                # Max steps early exit (after eval/checkpoint so final step is saved)
+                # Exit conditions (after eval/checkpoint so final step is saved)
                 if args.max_steps and global_step >= args.max_steps:
                     break
+                if use_wall_clock and train_start_time:
+                    if time.time() - train_start_time >= args.max_time:
+                        time_budget_exhausted = True
+                        break
 
-        avg_loss = epoch_loss / epoch_tokens
+        avg_loss = epoch_loss / epoch_tokens if epoch_tokens > 0 else 0
         print(f"Epoch {epoch + 1} avg loss: {avg_loss:.4f}, ppl: {math.exp(min(avg_loss, 20)):.2f}")
 
         if args.max_steps and global_step >= args.max_steps:
             print(f"Reached max_steps={args.max_steps}, stopping.")
             break
+        if time_budget_exhausted:
+            wall_time = time.time() - train_start_time
+            print(
+                f"Wall-clock budget exhausted ({wall_time:.1f}s / {args.max_time}s),"
+                f" {global_step} steps completed."
+            )
+            break
+
+    # Re-enable GC for final eval
+    gc.enable()
 
     # Final evaluation
-    val_ppl = evaluate(model, val_loader, device)
-    print(f"\nFinal validation perplexity: {val_ppl:.2f}")
-    print(f"Best validation perplexity: {best_val_ppl:.2f}")
+    val_result = evaluate(model, val_loader, device, bytes_per_token)
+    final_ppl = val_result["ppl"]
+    final_bpb = val_result.get("bpb")
+    bpb_str = f"\nFinal validation BPB: {final_bpb:.4f}" if final_bpb else ""
+    best_bpb_str = (
+        f"\nBest validation BPB: {best_val_bpb:.4f}" if best_val_bpb < float("inf") else ""
+    )
+    print(f"\nFinal validation perplexity: {final_ppl:.2f}{bpb_str}")
+    print(f"Best validation perplexity: {best_val_ppl:.2f}{best_bpb_str}")
+    if train_start_time:
+        total_time = time.time() - train_start_time
+        print(
+            f"Training wall time: {total_time:.1f}s ({global_step} steps,"
+            f" {global_step / total_time:.1f} steps/s)"
+        )
 
     if args.use_wandb:
         import wandb
 
-        wandb.log({"val/final_ppl": val_ppl, "val/best_ppl": best_val_ppl})
+        log = {"val/final_ppl": final_ppl, "val/best_ppl": best_val_ppl}
+        if final_bpb:
+            log["val/final_bpb"] = final_bpb
+        if best_val_bpb < float("inf"):
+            log["val/best_bpb"] = best_val_bpb
+        wandb.log(log)
         wandb.finish()
 
 
+def build_bytes_per_token() -> torch.Tensor:
+    """Precompute UTF-8 byte length for each token in GPT-2 vocab.
+
+    Used for bits-per-byte (BPB) calculation. GPT-2 uses byte-level BPE,
+    so each token maps to a deterministic byte sequence.
+    """
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    vocab_size = tok.vocab_size  # 50257
+    bpt = torch.ones(vocab_size, dtype=torch.float32)
+    for token_id in range(vocab_size):
+        decoded = tok.decode([token_id])
+        bpt[token_id] = max(len(decoded.encode("utf-8")), 1)
+    return bpt
+
+
 @torch.no_grad()
-def evaluate(model, dataloader, device) -> float:
-    """Compute perplexity on a dataset."""
+def evaluate(model, dataloader, device, bytes_per_token=None) -> dict:
+    """Compute perplexity and bits-per-byte on a dataset.
+
+    Returns dict with keys: ppl, bpb (if bytes_per_token provided), avg_loss.
+    """
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    total_nats = 0.0
+    total_bytes = 0.0
     use_mps = device.type == "mps"
     autocast_ctx = (
         torch.autocast("mps", dtype=torch.float16)
@@ -466,16 +583,39 @@ def evaluate(model, dataloader, device) -> float:
         else torch.autocast("cpu", enabled=False)
     )
 
+    compute_bpb = bytes_per_token is not None
+
     for input_ids, targets in dataloader:
         input_ids = input_ids.to(device)
         targets = targets.to(device)
         with autocast_ctx:
             result = model(input_ids, targets)
-        total_loss += result["loss"].item() * input_ids.numel()
-        total_tokens += input_ids.numel()
+
+        n_tokens = input_ids.numel()
+        total_loss += result["loss"].item() * n_tokens
+        total_tokens += n_tokens
+
+        if compute_bpb:
+            # Per-token cross entropy in nats (unreduced)
+            logits = result["logits"]
+            per_token_nats = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+                reduction="none",
+            )
+            total_nats += per_token_nats.sum().item()
+            # Sum UTF-8 byte lengths for target tokens
+            target_bytes = bytes_per_token[targets.view(-1).cpu()].sum().item()
+            total_bytes += target_bytes
 
     avg_loss = total_loss / total_tokens
-    return math.exp(min(avg_loss, 20))
+    ppl = math.exp(min(avg_loss, 20))
+
+    result = {"ppl": ppl, "avg_loss": avg_loss}
+    if compute_bpb and total_bytes > 0:
+        result["bpb"] = (total_nats / total_bytes) / math.log(2)
+
+    return result
 
 
 def main():
@@ -561,6 +701,10 @@ def main():
             "v3_100m_r32",
             "v3_proj",
             "v3_proj_r32",
+            "v3_100m_proj",
+            "v3_100m_proj_r32",
+            "v3_100m_r64",
+            "v3_100m_r128",
         ],
         help="Model config",
     )
@@ -577,6 +721,13 @@ def main():
     parser.add_argument(
         "--max-steps", type=int, default=None, help="Stop after N steps (overrides epochs)"
     )
+    parser.add_argument(
+        "--max-time",
+        type=int,
+        default=None,
+        help="Wall-clock training budget in seconds (excludes compile warmup)."
+        " Overrides --max-steps and --epochs.",
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--beta1", type=float, default=0.9)
@@ -585,6 +736,20 @@ def main():
     parser.add_argument("--min-lr-ratio", type=float, default=0.1, help="min_lr = lr * ratio")
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument(
+        "--optimizer",
+        choices=["adamw", "muon_adamw"],
+        default="adamw",
+        help="Optimizer: vanilla AdamW or Muon+AdamW hybrid",
+    )
+    parser.add_argument("--muon-lr", type=float, default=0.02, help="Muon LR for 2D weights")
+    parser.add_argument(
+        "--embed-lr-mult",
+        type=float,
+        default=10.0,
+        help="Embedding LR multiplier (embed_lr = lr * mult)",
+    )
+    parser.add_argument("--muon-momentum", type=float, default=0.95, help="Muon momentum")
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--save-interval", type=int, default=1000)
@@ -614,6 +779,10 @@ def main():
     args.config_name = args.config
     if args.checkpoint_dir is None:
         args.checkpoint_dir = f"./checkpoints/{args.config}"
+
+    # Wall-clock mode: override epochs to be very high (loop exits on time)
+    if args.max_time is not None:
+        args.epochs = 999
 
     configs = {
         "felix_2stage": make_felix_2stage_config,
@@ -913,6 +1082,40 @@ def main():
             spoke_rank=32,
             gate_schedule="uniform",
             embed_proj=True,
+        ),
+        # --- 100M scale + embed_proj configs ---
+        "v3_100m_proj": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            gate_schedule="none",
+            embed_proj=True,
+        ),
+        "v3_100m_proj_r32": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=32,
+            gate_schedule="uniform",
+            embed_proj=True,
+        ),
+        # --- 100M rank scaling ---
+        "v3_100m_r64": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=64,
+            gate_schedule="uniform",
+        ),
+        "v3_100m_r128": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=128,
+            gate_schedule="uniform",
         ),
     }
     config = configs[args.config]()

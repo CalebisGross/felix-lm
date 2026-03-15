@@ -37,10 +37,24 @@ class FelixV3Config:
     # Embedding projection (adds a linear layer after embedding, like v2's StreamInit)
     embed_proj: bool = False
 
+    # Per-layer residual lambdas: h = lambda_resid * h + lambda_x0 * x0
+    use_residual_lambdas: bool = False
+    lambda_x0_init: float = 0.1  # initial weight on original embedding
+
+    # Attention pattern
+    #   "full_causal" — full causal attention on every layer
+    #   "sssl"        — sliding-sliding-...-full_causal repeating pattern
+    attention_pattern: Literal["full_causal", "sssl"] = "full_causal"
+    sssl_window_size: int = 256  # window size for sliding layers
+    sssl_ratio: int = 3  # number of sliding layers per full causal layer
+
     # RoPE
     rope_base: float = 10000.0
     rope_helical_turns: int = 2
     rope_depth_alpha: float = 1.0
+
+    # Logit softcapping: cap * tanh(logits / cap). 0 = disabled.
+    logit_softcap: float = 0.0
 
     # Training
     tie_embeddings: bool = True

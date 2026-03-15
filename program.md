@@ -113,7 +113,7 @@ These have been thoroughly swept and should NOT be re-tested:
 
 | Parameter | Value | Alternatives tested |
 |-----------|-------|-------------------|
-| LR | 2e-2 | 1e-3 through 3e-2 |
+| LR (AdamW) | 2e-2 | 1e-3 through 3e-2 |
 | Weight decay | 0.1 | 0 through 0.2 |
 | beta1 | 0.9 | 0.85 |
 | beta2 | 0.99 | 0.95, 0.98, 0.999 |
@@ -125,27 +125,68 @@ These have been thoroughly swept and should NOT be re-tested:
 | Helical RoPE turns | 2 | 0 |
 | torch.compile | yes | — |
 
+## New training recipe knobs (Karpathy-inspired)
+
+These are backbone improvements, independent of spokes. Each is toggled via config
+fields and/or CLI args. Test each independently, then in combination.
+
+### Logit softcapping
+- Config: `logit_softcap: float = 0.0` (0 = disabled, try 15.0 or 30.0)
+- Caps logits via `cap * tanh(logits / cap)`. Prevents overconfident early predictions.
+- Zero parameter overhead.
+
+### Per-layer residual lambdas
+- Config: `use_residual_lambdas: bool = False`, `lambda_x0_init: float = 0.1`
+- Each layer gets two learnable scalars: `h = lambda_resid * h + lambda_x0 * x0`
+- x0 is the original embedding output. Lets deeper layers access clean token info.
+- 40 extra params (negligible). lambda_resid inits to 1.0, lambda_x0 to 0.1.
+
+### SSSL attention pattern
+- Config: `attention_pattern: "full_causal" | "sssl"`, `sssl_window_size: int = 256`, `sssl_ratio: int = 3`
+- Repeating pattern of N sliding window layers + 1 full causal layer. Last layer always full causal.
+- Same param count as full causal. Sliding layers are computationally cheaper.
+- v2 experiments proved hetero attention helps. SSSL is a clean version of same idea.
+
+### Muon optimizer
+- CLI: `--optimizer muon_adamw --muon-lr 0.02 --embed-lr-mult 10.0 --muon-momentum 0.95`
+- Muon for 2D weight matrices (attention Q/K/V/O, FFN gate/up/down), AdamW for everything else.
+- Uses Newton-Schulz polar decomposition for steepest descent under spectral norm.
+- Converges significantly faster than AdamW on weight matrices.
+- LR auto-scaled by sqrt(768/d_embed) for muP-style width correction.
+- **NOTE:** Muon LR (default 0.02) is separate from AdamW LR. When using Muon, the
+  locked-in AdamW LR of 2e-2 applies only to non-Muon params. You may need to sweep
+  Muon LR separately.
+
 ## Experiment plan
 
-### Phase 1: Does it work at all? (11M)
+### Phase 1: Does it work at all? (11M) [COMPLETE]
 1. `v3_base` — 4 spokes, rank=16, progressive gates -> compare to v2_baseline (44.81)
 2. `v3_none` — 0 spokes (pure transformer) -> should match v2_baseline
 3. `v3_uniform` — 4 spokes, rank=16, uniform gates -> ablate the schedule
 
-### Phase 2: Spoke tuning (11M)
+### Phase 2: Spoke tuning (11M) [COMPLETE]
 4. `v3_r8` — rank=8 (less capacity per spoke)
 5. `v3_r32` — rank=32 (more capacity, ~5% overhead)
 6. `v3_2spoke` — 2 spokes instead of 4
 7. `v3_8spoke` — 8 spokes (very diverse, tiny each)
 
-### Phase 3: Architecture variations (if Phase 1-2 show promise)
+### Phase 3: Scale test (100M) [COMPLETE]
+- v3_100m_r32 beats baseline by 1.19 PPL (2.7% improvement)
+
+### Phase 4: Training recipe enhancements [NEW]
+Test each independently against current best (v3_proj_r32 at 45.98 PPL), then combine:
+8. Logit softcapping (try cap=15.0 and cap=30.0)
+9. Residual lambdas (lambda_x0_init=0.1, then sweep 0.01-0.5)
+10. SSSL attention (ratio=3, window_size=256, then sweep window 128-384)
+11. Muon optimizer (default LRs first, then sweep muon_lr 0.01-0.05)
+12. All four combined
+13. Ablate: remove each one from full combo to measure individual contribution
+
+### Phase 5: Architecture variations (if Phase 4 improves baseline)
 - Spoke attention (single-head cross-attention instead of linear)
 - Shared W_down across spokes (differentiate only via W_up)
 - Spoke dropout (random subset of spokes per layer)
 - Deeper spoke bottleneck (2-layer MLP instead of linear)
-
-### Phase 4: Scale test (100M)
-- Same design at d=512, compare against v2_100m_base
 
 ## Constraints
 

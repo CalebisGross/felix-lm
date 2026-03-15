@@ -235,3 +235,124 @@ def test_gradient_checkpointing():
     assert torch.allclose(result1["loss"], result2["loss"], atol=1e-5), (
         f"Loss mismatch: {result1['loss'].item()} vs {result2['loss'].item()}"
     )
+
+
+# --- Logit softcapping tests ---
+
+
+def test_logit_softcap_bounds():
+    """With softcap=15, logits should be bounded to [-15, 15]."""
+    config = _small_config(logit_softcap=15.0)
+    model = FelixLMv3(config)
+
+    token_ids = torch.randint(0, config.vocab_size, (2, 16))
+    result = model(token_ids)
+
+    assert result["logits"].max() <= 15.0 + 1e-6
+    assert result["logits"].min() >= -15.0 - 1e-6
+
+
+def test_logit_softcap_disabled():
+    """With softcap=0 (default), logits should be uncapped."""
+    config = _small_config(logit_softcap=0.0)
+    model = FelixLMv3(config)
+    config_off = _small_config()
+    model_off = FelixLMv3(config_off)
+    model_off.load_state_dict(model.state_dict())
+
+    token_ids = torch.randint(0, config.vocab_size, (2, 16))
+    result = model(token_ids)
+    result_off = model_off(token_ids)
+
+    assert torch.allclose(result["logits"], result_off["logits"], atol=1e-6)
+
+
+# --- Residual lambda tests ---
+
+
+def test_residual_lambdas_init():
+    """Lambda_resid should init to 1.0, lambda_x0 to configured value."""
+    config = _small_config(use_residual_lambdas=True, lambda_x0_init=0.1)
+    model = FelixLMv3(config)
+
+    for lr in model.lambda_resid:
+        assert abs(lr.item() - 1.0) < 1e-6
+    for lx in model.lambda_x0:
+        assert abs(lx.item() - 0.1) < 1e-6
+
+
+def test_residual_lambdas_forward():
+    """Forward pass with lambdas should produce finite output."""
+    config = _small_config(use_residual_lambdas=True)
+    model = FelixLMv3(config)
+
+    token_ids = torch.randint(0, config.vocab_size, (2, 16))
+    targets = torch.randint(0, config.vocab_size, (2, 16))
+    result = model(token_ids, targets)
+
+    assert torch.isfinite(result["loss"])
+    assert result["logits"].shape == (2, 16, config.vocab_size)
+
+
+def test_residual_lambdas_gradients():
+    """Lambda parameters should receive gradients."""
+    config = _small_config(use_residual_lambdas=True)
+    model = FelixLMv3(config)
+
+    token_ids = torch.randint(0, config.vocab_size, (2, 16))
+    targets = torch.randint(0, config.vocab_size, (2, 16))
+    result = model(token_ids, targets)
+    result["loss"].backward()
+
+    for i, lr in enumerate(model.lambda_resid):
+        assert lr.grad is not None, f"lambda_resid[{i}] has no gradient"
+    for i, lx in enumerate(model.lambda_x0):
+        assert lx.grad is not None, f"lambda_x0[{i}] has no gradient"
+
+
+# --- SSSL attention pattern tests ---
+
+
+def test_sssl_pattern_types():
+    """SSSL pattern should assign correct attention types per layer."""
+    from felix_lm.attention import FullCausalAttention, SlidingWindowAttention
+
+    config = _small_config(attention_pattern="sssl", sssl_ratio=3)
+    model = FelixLMv3(config)
+
+    # 4 layers with ratio=3: pattern is S-S-S-F, last layer forced F
+    # Layer 0: S, 1: S, 2: S, 3: F (both by pattern and last-layer rule)
+    for i, layer in enumerate(model.layers):
+        if i == config.sssl_ratio or i == config.num_layers - 1:
+            assert isinstance(layer.attn, FullCausalAttention), f"Layer {i} should be full_causal"
+        else:
+            assert isinstance(layer.attn, SlidingWindowAttention), (
+                f"Layer {i} should be sliding_window"
+            )
+
+
+def test_sssl_last_layer_global():
+    """Last layer should always be full_causal regardless of pattern position."""
+    from felix_lm.attention import FullCausalAttention
+
+    # 5 layers with ratio=3: pattern S-S-S-F-S, but last (4) forced to F
+    config = _small_config(num_layers=5, attention_pattern="sssl", sssl_ratio=3)
+    model = FelixLMv3(config)
+
+    assert isinstance(model.layers[-1].attn, FullCausalAttention)
+
+
+def test_sssl_forward_backward():
+    """SSSL model should produce finite loss and gradients."""
+    config = _small_config(attention_pattern="sssl", sssl_window_size=8, sssl_ratio=3)
+    model = FelixLMv3(config)
+
+    token_ids = torch.randint(0, config.vocab_size, (2, 16))
+    targets = torch.randint(0, config.vocab_size, (2, 16))
+    result = model(token_ids, targets)
+    result["loss"].backward()
+
+    assert torch.isfinite(result["loss"])
+    for name, p in model.named_parameters():
+        if p.requires_grad and p.grad is not None:
+            assert torch.isfinite(p.grad).all(), f"{name} has non-finite gradient"

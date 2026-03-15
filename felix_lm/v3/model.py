@@ -31,18 +31,28 @@ class FelixLMv3(nn.Module):
         self.embed_proj = nn.Linear(config.d_embed, config.d_embed) if config.embed_proj else None
 
         # 2. Transformer backbone (the hub)
-        self.layers = nn.ModuleList(
-            [
+        layers = []
+        for i in range(config.num_layers):
+            if config.attention_pattern == "sssl":
+                period = config.sssl_ratio + 1
+                is_last = i == config.num_layers - 1
+                is_global = (i % period) == config.sssl_ratio or is_last
+                attn_type = "full_causal" if is_global else "sliding_window"
+                window = config.sssl_window_size
+            else:
+                attn_type = "full_causal"
+                window = 64  # unused
+            layers.append(
                 TransformerBlock(
                     dim=config.d_embed,
                     num_heads=config.num_heads,
-                    attention_type="full_causal",
+                    attention_type=attn_type,
                     ffn_mult=config.ffn_mult,
+                    window_size=window,
                     dropout=config.dropout,
                 )
-                for _ in range(config.num_layers)
-            ]
-        )
+            )
+        self.layers = nn.ModuleList(layers)
 
         # 3. Spoke layers (the agents)
         if config.gate_schedule != "none":
@@ -60,7 +70,19 @@ class FelixLMv3(nn.Module):
         else:
             self.spokes = None
 
-        # 4. Output
+        # 4. Per-layer residual lambdas: h = lambda_resid * h + lambda_x0 * x0
+        if config.use_residual_lambdas:
+            self.lambda_resid = nn.ParameterList(
+                [nn.Parameter(torch.ones(1)) for _ in range(config.num_layers)]
+            )
+            self.lambda_x0 = nn.ParameterList(
+                [
+                    nn.Parameter(torch.full((1,), config.lambda_x0_init))
+                    for _ in range(config.num_layers)
+                ]
+            )
+
+        # 5. Output
         self.output_norm = RMSNorm(config.d_embed)
 
         # Tied embeddings with logit scaling
@@ -119,6 +141,9 @@ class FelixLMv3(nn.Module):
         if self.embed_proj is not None:
             h = self.embed_proj(h)
 
+        # Save original embedding for residual lambdas
+        x0 = h if config.use_residual_lambdas else None
+
         # Process through hub layers + spokes
         agreements: list[torch.Tensor] = []
         gate_values: list[torch.Tensor] = []
@@ -159,12 +184,19 @@ class FelixLMv3(nn.Module):
                         torch.sigmoid(spoke.gate_bias).detach()  # type: ignore[arg-type]
                     )
 
+            # Residual lambdas: mix running hidden state with original embedding
+            if x0 is not None:
+                h = self.lambda_resid[i] * h + self.lambda_x0[i] * x0
+
         # Output logits
         h = self.output_norm(h)
         if config.tie_embeddings:
             logits = F.linear(h, self.embedding.weight) * self._logit_scale
         else:
             raise NotImplementedError("Untied embeddings not implemented for v3")
+
+        if config.logit_softcap > 0:
+            logits = config.logit_softcap * torch.tanh(logits / config.logit_softcap)
 
         result = {
             "logits": logits,
