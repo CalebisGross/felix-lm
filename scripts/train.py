@@ -555,6 +555,7 @@ def main():
             "v3_r32",
             "v3_2spoke",
             "v3_8spoke",
+            "v3_r64",
         ],
         help="Model config",
     )
@@ -867,6 +868,12 @@ def main():
             num_layers=20,
             num_spokes=8,
             spoke_rank=16,
+            gate_schedule="uniform",
+        ),
+        "v3_r64": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=64,
             gate_schedule="uniform",
         ),
     }
