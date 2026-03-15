@@ -89,3 +89,4 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 217d047	48.82	discard	v3_r8: 4 spokes rank=8 uniform gates, 11.85M — worse than v3_none (47.90), rank too small
 3613b2b	0.0	crash	v3_8spoke: 8 spokes rank=16 uniform — killed, 2.5x slower, val_ppl 156.23 at step 500 (worse than v3_uniform)
 5168c8b	47.94	discard	v3_uniform (random W_up init): 4 spokes rank=16, 12.01M — worse than zeros init (47.64), noise hurts
+9a902f0	48.62	discard	v3_2spoke: 2 spokes rank=16 uniform gates, 11.85M — not enough diversity, worse than 4 spokes
