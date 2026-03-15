@@ -92,3 +92,4 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 9a902f0	48.62	discard	v3_2spoke: 2 spokes rank=16 uniform gates, 11.85M — not enough diversity, worse than 4 spokes
 3f8fa10	47.18	keep	v3_r32: 4 spokes rank=32 uniform gates, 12.34M — NEW BEST v3! -0.72 PPL vs baseline (47.90)
 747ef55	47.06	keep	v3_r64: 4 spokes rank=64 uniform gates, 12.99M — NEW BEST! -0.84 vs none, diminishing returns vs r32
+2936387	41.89	keep	v3_r32 at 5000 steps: BEATS v2_baseline (44.81)! Hub-and-spoke wins with more training
