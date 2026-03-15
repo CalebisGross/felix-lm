@@ -95,3 +95,5 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 2936387	41.89	keep	v3_r32 at 5000 steps: BEATS v2_baseline (44.81)! Hub-and-spoke wins with more training
 8500c0a	39.63	keep	v2_baseline at 5000 steps: 39.63 PPL — still beats v3_r32 (41.89) at matched steps
 73ad1e2	47.69	discard	v3_deep22: 22 layers no spokes (12.21M) = 47.69 — WORSE than v3_r32 (47.18, 12.34M). Spokes beat depth!
+81bd4bc	43.88	keep	v3_100m_none: 100M plain transformer baseline, d=512, 20 layers, LR 2e-3, 2500 steps
+81bd4bc	42.69	keep	v3_100m_r32: 100M with 4 spokes r=32, 112.3M — BEATS baseline (43.88) by 1.19 PPL! Spokes scale!
