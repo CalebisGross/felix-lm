@@ -559,6 +559,8 @@ def main():
             "v3_deep22",
             "v3_100m_none",
             "v3_100m_r32",
+            "v3_proj",
+            "v3_proj_r32",
         ],
         help="Model config",
     )
@@ -898,6 +900,19 @@ def main():
             num_spokes=4,
             spoke_rank=32,
             gate_schedule="uniform",
+        ),
+        # --- Embedding projection configs ---
+        "v3_proj": lambda: FelixV3Config(
+            num_layers=20,
+            gate_schedule="none",
+            embed_proj=True,
+        ),
+        "v3_proj_r32": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=32,
+            gate_schedule="uniform",
+            embed_proj=True,
         ),
     }
     config = configs[args.config]()

@@ -34,6 +34,9 @@ class FelixV3Config:
     gate_init_start: float = -2.0  # sigmoid(-2) ~ 0.12, early layers barely affect hub
     gate_init_end: float = 2.0  # sigmoid(2) ~ 0.88, late layers strongly affect hub
 
+    # Embedding projection (adds a linear layer after embedding, like v2's StreamInit)
+    embed_proj: bool = False
+
     # RoPE
     rope_base: float = 10000.0
     rope_helical_turns: int = 2
@@ -74,7 +77,10 @@ class FelixV3Config:
         else:
             spokes_total = 0
 
+        # Embedding projection
+        embed_proj = (d * d + d) if self.embed_proj else 0
+
         # Output norm
         out_norm = d
 
-        return embed + backbone + spokes_total + out_norm
+        return embed + backbone + spokes_total + embed_proj + out_norm

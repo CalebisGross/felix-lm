@@ -26,8 +26,9 @@ class FelixLMv3(nn.Module):
         super().__init__()
         self.config = config
 
-        # 1. Embedding (standard, no stream projections)
+        # 1. Embedding
         self.embedding = nn.Embedding(config.vocab_size, config.d_embed)
+        self.embed_proj = nn.Linear(config.d_embed, config.d_embed) if config.embed_proj else None
 
         # 2. Transformer backbone (the hub)
         self.layers = nn.ModuleList(
@@ -115,6 +116,8 @@ class FelixLMv3(nn.Module):
 
         # Embed
         h = self.embedding(token_ids)  # [B, T, d]
+        if self.embed_proj is not None:
+            h = self.embed_proj(h)
 
         # Process through hub layers + spokes
         agreements: list[torch.Tensor] = []
