@@ -52,9 +52,9 @@ class SpokeLayer(nn.Module):
         )
         self.w_up = nn.ModuleList([nn.Linear(rank, d_model, bias=False) for _ in range(num_spokes)])
 
-        # Initialize up projections small so spokes start near-identity
+        # Initialize up projections to zero so spokes start as identity
         for up in self.w_up:
-            nn.init.normal_(up.weight, std=0.02 / (num_spokes**0.5))  # type: ignore[arg-type]
+            nn.init.zeros_(up.weight)  # type: ignore[arg-type]
 
         # Learned scalar gate (per-layer)
         self.gate_bias = nn.Parameter(torch.tensor(gate_init))
