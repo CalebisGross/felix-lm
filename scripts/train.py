@@ -60,6 +60,8 @@ from felix_lm.model import FelixLM
 from felix_lm.utils import count_parameters
 from felix_lm.v2.config import FelixV2Config
 from felix_lm.v2.model import FelixLMv2
+from felix_lm.v3.config import FelixV3Config
+from felix_lm.v3.model import FelixLMv3
 
 # --- Data ---
 
@@ -132,7 +134,9 @@ def train(config: FelixConfig, args):
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
     # Model
-    if isinstance(config, FelixV2Config):
+    if isinstance(config, FelixV3Config):
+        model = FelixLMv3(config).to(device)
+    elif isinstance(config, FelixV2Config):
         model = FelixLMv2(config).to(device)
     else:
         model = FelixLM(config).to(device)
@@ -140,7 +144,17 @@ def train(config: FelixConfig, args):
         print("Compiling model with torch.compile...")
         model = torch.compile(model)
     n_params = count_parameters(model)
-    if isinstance(config, FelixV2Config):
+    if isinstance(config, FelixV3Config):
+        spoke_info = (
+            f"{config.num_spokes} spokes, rank={config.spoke_rank}"
+            if config.gate_schedule != "none"
+            else "no spokes"
+        )
+        print(
+            f"\nModel: v3 hub-and-spoke, {config.num_layers} layers, {spoke_info},"
+            f" {n_params:,} params"
+        )
+    elif isinstance(config, FelixV2Config):
         print(f"\nModel: v2 adaptive, {config.total_layers} layers, {n_params:,} params")
     else:
         print(
@@ -218,13 +232,17 @@ def train(config: FelixConfig, args):
             "epochs": args.epochs,
             "weight_decay": args.weight_decay,
         }
-        if not isinstance(config, FelixV2Config):
+        if isinstance(config, FelixV3Config):
+            wandb_config["num_spokes"] = config.num_spokes
+            wandb_config["spoke_rank"] = config.spoke_rank
+            wandb_config["gate_schedule"] = config.gate_schedule
+        elif not isinstance(config, FelixV2Config):
             wandb_config["stages"] = config.num_stages
         wandb.init(project="felix-lm", config=wandb_config)
 
     # Freeze schedule (v1 only)
     frozen_params = []
-    if not isinstance(config, FelixV2Config):
+    if not isinstance(config, (FelixV2Config, FelixV3Config)):
         if config.freeze_stream_init_steps > 0:
             for name, param in model.named_parameters():
                 if "embedding.stream_projections" in name:
@@ -306,7 +324,7 @@ def train(config: FelixConfig, args):
                 global_step += 1
 
                 # v1-only training schedules
-                if not isinstance(config, FelixV2Config):
+                if not isinstance(config, (FelixV2Config, FelixV3Config)):
                     # Supervision curriculum
                     if (
                         args.supervision_off_after > 0
@@ -367,6 +385,16 @@ def train(config: FelixConfig, args):
                         for k, ms in enumerate(last_result["merge_strengths"]):
                             log_dict[f"v2/merge_strength_layer_{k}"] = (
                                 ms.item() if hasattr(ms, "item") else ms
+                            )
+                    # v3-specific: per-layer agreements and gate values
+                    if last_result and "gate_values" in last_result:
+                        for k, gv in enumerate(last_result["gate_values"]):
+                            log_dict[f"v3/gate_layer_{k}"] = (
+                                gv.item() if hasattr(gv, "item") else gv
+                            )
+                        for k, ag in enumerate(last_result.get("agreements", [])):
+                            log_dict[f"v3/agreement_layer_{k}"] = (
+                                ag.item() if hasattr(ag, "item") else ag
                             )
 
                     import wandb
@@ -519,6 +547,14 @@ def main():
             "v2_100m_felix_4s",
             "v2_100m_felix_6s",
             "v2_100m_felix_4str",
+            # v3 hub-and-spoke configs
+            "v3_base",
+            "v3_none",
+            "v3_uniform",
+            "v3_r8",
+            "v3_r32",
+            "v3_2spoke",
+            "v3_8spoke",
         ],
         help="Model config",
     )
@@ -792,6 +828,43 @@ def main():
             ffn_mult=4,
             merge_bias_init=1.0,
         ),
+        # --- v3 hub-and-spoke configs ---
+        "v3_base": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=16,
+            gate_schedule="progressive",
+        ),
+        "v3_none": lambda: FelixV3Config(
+            num_layers=20,
+            gate_schedule="none",
+        ),
+        "v3_uniform": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=16,
+            gate_schedule="uniform",
+        ),
+        "v3_r8": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=8,
+        ),
+        "v3_r32": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=4,
+            spoke_rank=32,
+        ),
+        "v3_2spoke": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=2,
+            spoke_rank=16,
+        ),
+        "v3_8spoke": lambda: FelixV3Config(
+            num_layers=20,
+            num_spokes=8,
+            spoke_rank=16,
+        ),
     }
     config = configs[args.config]()
 
@@ -800,11 +873,11 @@ def main():
         config.rope_helical_turns = args.rope_turns
         print(f"  Override: rope_helical_turns = {args.rope_turns}")
 
-    if args.label_smoothing > 0 and isinstance(config, FelixV2Config):
+    if args.label_smoothing > 0 and isinstance(config, (FelixV2Config, FelixV3Config)):
         config.label_smoothing = args.label_smoothing
         print(f"  Override: label_smoothing = {args.label_smoothing}")
 
-    if args.supervision_off_after > 0 and not isinstance(config, FelixV2Config):
+    if args.supervision_off_after > 0 and not isinstance(config, (FelixV2Config, FelixV3Config)):
         # Ensure supervision starts ON for curriculum training
         if not config.use_deep_supervision:
             config.use_deep_supervision = True
