@@ -83,3 +83,7 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 0751c27	67.81	discard	exp80: v2_100m_felix_4str (4 streams) at LR 2e-3 — 2 streams sufficient
 1bbf480	61.37	keep	exp81: v2_100m_base at LR 2e-3 — BASELINE ALSO IMPROVES! Felix win was LR artifact
 2590c74	70.16	discard	exp82: v2_100m_felix_4s at LR 1.5e-3 — 2e-3 confirmed optimal for Felix
+217d047	47.90	keep	v3_none: plain transformer baseline (no spokes), 20 layers d128, 11.68M params
+217d047	48.61	discard	v3_base: 4 spokes rank=16 progressive gates, 12.01M — +0.71 PPL vs v3_none (47.90)
+217d047	47.64	keep	v3_uniform: 4 spokes rank=16 uniform gates, 12.01M — BETTER than v3_none (47.90) by 0.26 PPL
+217d047	48.82	discard	v3_r8: 4 spokes rank=8 uniform gates, 11.85M — worse than v3_none (47.90), rank too small

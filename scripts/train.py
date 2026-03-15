@@ -849,21 +849,25 @@ def main():
             num_layers=20,
             num_spokes=4,
             spoke_rank=8,
+            gate_schedule="uniform",
         ),
         "v3_r32": lambda: FelixV3Config(
             num_layers=20,
             num_spokes=4,
             spoke_rank=32,
+            gate_schedule="uniform",
         ),
         "v3_2spoke": lambda: FelixV3Config(
             num_layers=20,
             num_spokes=2,
             spoke_rank=16,
+            gate_schedule="uniform",
         ),
         "v3_8spoke": lambda: FelixV3Config(
             num_layers=20,
             num_spokes=8,
             spoke_rank=16,
+            gate_schedule="uniform",
         ),
     }
     config = configs[args.config]()
