@@ -556,6 +556,7 @@ def main():
             "v3_2spoke",
             "v3_8spoke",
             "v3_r64",
+            "v3_deep22",
         ],
         help="Model config",
     )
@@ -875,6 +876,11 @@ def main():
             num_spokes=4,
             spoke_rank=64,
             gate_schedule="uniform",
+        ),
+        # Param-matched baseline: 22 layers (no spokes) to match v3_r32's 12.34M
+        "v3_deep22": lambda: FelixV3Config(
+            num_layers=22,
+            gate_schedule="none",
         ),
     }
     config = configs[args.config]()
