@@ -12,7 +12,10 @@
 # IMPORTANT: Run debug_nan.py FIRST before launching this script.
 set -e
 
-source "$(dirname "$0")/../.venv/bin/activate"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+source .venv/bin/activate
+export PYTHONPATH="$(pwd)"
 
 echo "=== v3 Scaling Run $(date) ==="
 echo "GPU: $(rocm-smi --showproductname 2>/dev/null | grep 'Card' || echo 'unknown')"
