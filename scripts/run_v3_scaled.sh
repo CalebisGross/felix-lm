@@ -30,11 +30,17 @@ echo ""
 # NOTE: Batch sizes below are conservative estimates for MI300X 192GB with
 # math SDPA (which materializes T*T attention). Adjust based on debug_nan.py output.
 
+# Batch sizes from debug_nan.py on MI300X 192GB:
+#   v3_baseline_100m: max=16, use 14 (safe headroom)
+#   v3_100m_proj_r64: max=20, use 16
+#   v3_baseline_500m: max=64, use 48 (grad_ckpt ON)
+#   v3_500m_proj_r64: max=64, use 48 (grad_ckpt ON)
+
 echo "=== [1/4] v3_baseline_100m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_100m \
     --device cuda \
-    --batch-size 20 --grad-accum 12 \
+    --batch-size 14 --grad-accum 17 \
     --lr 3e-3 --beta2 0.99 \
     --compile --dtype bf16 \
     --eval-interval 1000 \
@@ -45,21 +51,21 @@ echo "=== [2/4] v3_100m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_100m_proj_r64 \
     --device cuda \
-    --batch-size 20 --grad-accum 12 \
+    --batch-size 16 --grad-accum 15 \
     --lr 3e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile --dtype bf16 \
     --eval-interval 1000 \
     --tokens-per-epoch 1000000000
 
-# --- 500M experiments (1B tokens each) ---
+# --- 500M experiments (1B tokens each, grad checkpointing ON) ---
 
 echo ""
 echo "=== [3/4] v3_baseline_500m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_500m \
     --device cuda \
-    --batch-size 12 --grad-accum 20 \
+    --batch-size 48 --grad-accum 5 \
     --lr 1e-3 --beta2 0.99 \
     --compile --dtype bf16 \
     --eval-interval 500 \
@@ -70,7 +76,7 @@ echo "=== [4/4] v3_500m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_500m_proj_r64 \
     --device cuda \
-    --batch-size 12 --grad-accum 20 \
+    --batch-size 48 --grad-accum 5 \
     --lr 1e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile --dtype bf16 \
