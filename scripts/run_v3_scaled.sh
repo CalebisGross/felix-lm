@@ -2,10 +2,10 @@
 # Run v3 scaling experiments on MI300X.
 # Usage: nohup bash scripts/run_v3_scaled.sh &> v3_training.log &
 #
-# Budget: ~$49 (~7.5 hours @ $6.50/hr)
+# Budget: ~$49 (~24.6 hours @ $1.99/hr)
 #   100M: 1B tokens each (~2-3hr per run, ~5hr total)
-#   500M: 250M tokens each (~1-1.5hr per run, ~2.5hr total)
-#   Total: ~7.5hr = ~$49
+#   500M: 1B tokens each (~4-6hr per run, ~10hr total)
+#   Total: ~15-18hr = ~$30-36, well within budget
 #
 # IMPORTANT: torch.compile + SDPA math backend must be used on MI300X.
 # IMPORTANT: Must use ROCm torch build, not CUDA.
@@ -43,21 +43,21 @@ python scripts/train_scaled.py \
     --eval-interval 1000 \
     --tokens-per-epoch 1000000000
 
-# --- 500M experiments (250M tokens each — directional) ---
+# --- 500M experiments (1B tokens each) ---
 
 echo ""
-echo "=== [3/4] v3_baseline_500m (control, 250M tokens) ==="
+echo "=== [3/4] v3_baseline_500m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_500m \
     --device cuda \
     --batch-size 8 --grad-accum 32 \
     --lr 1e-3 --beta2 0.99 \
     --compile \
-    --eval-interval 250 \
-    --tokens-per-epoch 250000000
+    --eval-interval 500 \
+    --tokens-per-epoch 1000000000
 
 echo ""
-echo "=== [4/4] v3_500m_proj_r64 (spokes, 250M tokens) ==="
+echo "=== [4/4] v3_500m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_500m_proj_r64 \
     --device cuda \
@@ -65,8 +65,8 @@ python scripts/train_scaled.py \
     --lr 1e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile \
-    --eval-interval 250 \
-    --tokens-per-epoch 250000000
+    --eval-interval 500 \
+    --tokens-per-epoch 1000000000
 
 echo ""
 echo "=== All v3 experiments complete $(date) ==="
