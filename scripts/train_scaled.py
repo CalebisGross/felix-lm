@@ -296,15 +296,19 @@ class DolmaDataset(IterableDataset):
         self.split = split
 
     def __iter__(self):
-        from datasets import load_dataset
+        from datasets import Features, Value, load_dataset
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        # Only load 'text' column — Dolma shards have inconsistent schemas
+        # (some include warcinfo, sa_remove_ranges, etc). Specifying features
+        # explicitly avoids CastError on heterogeneous shards.
         ds = load_dataset(
             "allenai/dolma3_dolmino_mix-100B-1125",
             split="train",
             streaming=True,
-        ).select_columns(["text"])
+            features=Features({"text": Value("string")}),
+        )
 
         buffer = []
         tokens_seen = 0
