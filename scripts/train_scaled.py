@@ -238,6 +238,7 @@ def make_v3_baseline_500m_config() -> FelixV3Config:
         gate_schedule="none",
         embed_proj=True,
         dropout=0.1,
+        gradient_checkpointing=True,
     )
 
 
@@ -255,6 +256,7 @@ def make_v3_500m_proj_r64_config() -> FelixV3Config:
         gate_schedule="uniform",
         embed_proj=True,
         dropout=0.1,
+        gradient_checkpointing=True,
     )
 
 

@@ -16,14 +16,19 @@ source "$(dirname "$0")/../.venv/bin/activate"
 
 echo "=== v3 Scaling Run $(date) ==="
 echo "GPU: $(rocm-smi --showproductname 2>/dev/null | grep 'Card' || echo 'unknown')"
-echo "PyTorch: $(python -c 'import torch; print(torch.__version__)')"
+echo "PyTorch: $(python -c 'import torch; print(torch.cuda.is_available(), torch.version.hip)')"
+echo ""
+
+# Pre-flight: run 5 steps of each config to catch NaN/OOM before committing hours
+echo "=== Pre-flight NaN/OOM check ==="
+python scripts/debug_nan.py --v3 --steps 5
+echo "=== Pre-flight passed ==="
 echo ""
 
 # --- 100M experiments (1B tokens each) ---
 
 # NOTE: Batch sizes below are conservative estimates for MI300X 192GB with
-# math SDPA (which materializes T*T attention). Run debug_nan.py first to
-# find actual max batch, then adjust these. More batch = less grad_accum = faster.
+# math SDPA (which materializes T*T attention). Adjust based on debug_nan.py output.
 
 echo "=== [1/4] v3_baseline_100m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
@@ -31,7 +36,7 @@ python scripts/train_scaled.py \
     --device cuda \
     --batch-size 20 --grad-accum 12 \
     --lr 3e-3 --beta2 0.99 \
-    --compile \
+    --compile --dtype bf16 \
     --eval-interval 1000 \
     --tokens-per-epoch 1000000000
 
@@ -43,7 +48,7 @@ python scripts/train_scaled.py \
     --batch-size 20 --grad-accum 12 \
     --lr 3e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
-    --compile \
+    --compile --dtype bf16 \
     --eval-interval 1000 \
     --tokens-per-epoch 1000000000
 
@@ -56,7 +61,7 @@ python scripts/train_scaled.py \
     --device cuda \
     --batch-size 12 --grad-accum 20 \
     --lr 1e-3 --beta2 0.99 \
-    --compile \
+    --compile --dtype bf16 \
     --eval-interval 500 \
     --tokens-per-epoch 1000000000
 
@@ -68,7 +73,7 @@ python scripts/train_scaled.py \
     --batch-size 12 --grad-accum 20 \
     --lr 1e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
-    --compile \
+    --compile --dtype bf16 \
     --eval-interval 500 \
     --tokens-per-epoch 1000000000
 
