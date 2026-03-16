@@ -207,8 +207,36 @@ def train(config: FelixConfig, args):
 
         optimizer = build_optimizer(model, args)
     else:
+        # Separate param groups for spoke-specific LR
+        spoke_lr_mult = args.spoke_lr_mult
+        if (
+            spoke_lr_mult != 1.0
+            and isinstance(config, FelixV3Config)
+            and config.gate_schedule != "none"
+        ):
+            spoke_params = []
+            other_params = []
+            raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+            spoke_names = set()
+            if raw_model.spokes is not None:
+                for name, param in raw_model.spokes.named_parameters():
+                    spoke_names.add(id(param))
+                    spoke_params.append(param)
+            for param in model.parameters():
+                if id(param) not in spoke_names:
+                    other_params.append(param)
+            spoke_lr = args.lr * spoke_lr_mult
+            param_groups = [
+                {"params": other_params, "lr": args.lr, "base_lr": args.lr},
+                {"params": spoke_params, "lr": spoke_lr, "base_lr": spoke_lr},
+            ]
+            print(f"  Spoke LR: {spoke_lr:.4f} ({spoke_lr_mult}x backbone)")
+        else:
+            param_groups = [
+                {"params": list(model.parameters()), "lr": args.lr, "base_lr": args.lr},
+            ]
         optimizer = torch.optim.AdamW(
-            [{"params": list(model.parameters()), "lr": args.lr, "base_lr": args.lr}],
+            param_groups,
             lr=args.lr,
             weight_decay=args.weight_decay,
             betas=(args.beta1, args.beta2),
@@ -705,6 +733,10 @@ def main():
             "v3_100m_proj_r32",
             "v3_100m_r64",
             "v3_100m_r128",
+            "v3_100m_r32_swiglu",
+            "v3_100m_r32_every2",
+            "v3_100m_proj_r64",
+            "v3_100m_proj_r128",
         ],
         help="Model config",
     )
@@ -750,6 +782,12 @@ def main():
         help="Embedding LR multiplier (embed_lr = lr * mult)",
     )
     parser.add_argument("--muon-momentum", type=float, default=0.95, help="Muon momentum")
+    parser.add_argument(
+        "--spoke-lr-mult",
+        type=float,
+        default=1.0,
+        help="Spoke param LR multiplier (spoke_lr = lr * mult). Only for v3 with spokes.",
+    )
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--save-interval", type=int, default=1000)
@@ -1116,6 +1154,45 @@ def main():
             num_spokes=4,
             spoke_rank=128,
             gate_schedule="uniform",
+        ),
+        # --- SwiGLU spokes ---
+        "v3_100m_r32_swiglu": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=32,
+            gate_schedule="uniform",
+            spoke_swiglu=True,
+        ),
+        # --- Higher rank with proj ---
+        "v3_100m_proj_r64": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=64,
+            gate_schedule="uniform",
+            embed_proj=True,
+        ),
+        "v3_100m_proj_r128": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=128,
+            gate_schedule="uniform",
+            embed_proj=True,
+        ),
+        # --- Selective spokes ---
+        "v3_100m_r32_every2": lambda: FelixV3Config(
+            d_embed=512,
+            num_layers=20,
+            num_heads=8,
+            num_spokes=4,
+            spoke_rank=32,
+            gate_schedule="uniform",
+            spoke_every_n=2,
         ),
     }
     config = configs[args.config]()

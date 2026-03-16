@@ -24,6 +24,8 @@ class FelixV3Config:
     # Spokes (lightweight probes)
     num_spokes: int = 4
     spoke_rank: int = 16  # low-rank bottleneck dimension
+    spoke_swiglu: bool = False  # SwiGLU-style spokes (2 down projections, gated)
+    spoke_every_n: int = 1  # Apply spokes every N layers (1=every layer, 2=every other)
 
     # Gate schedule: how spoke feedback scales with depth
     #   "progressive" — early layers get small gates (explore), late layers get large (converge)
@@ -85,8 +87,12 @@ class FelixV3Config:
 
         # Per spoke layer (if spokes enabled):
         #   RMSNorm(d) + S * (W_down(d,r) + W_up(r,d)) + gate_bias(1)
+        #   SwiGLU adds S * W_gate(d,r) per layer
         if self.gate_schedule != "none":
-            spoke_layer = d + S * (d * r + r * d) + 1
+            down_up = d * r + r * d
+            if self.spoke_swiglu:
+                down_up += d * r  # extra gate projection
+            spoke_layer = d + S * down_up + 1
             spokes_total = L * spoke_layer
         else:
             spokes_total = 0

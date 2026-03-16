@@ -97,3 +97,24 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 73ad1e2	47.69	discard	v3_deep22: 22 layers no spokes (12.21M) = 47.69 — WORSE than v3_r32 (47.18, 12.34M). Spokes beat depth!
 81bd4bc	43.88	keep	v3_100m_none: 100M plain transformer baseline, d=512, 20 layers, LR 2e-3, 2500 steps
 81bd4bc	42.69	keep	v3_100m_r32: 100M with 4 spokes r=32, 112.3M — BEATS baseline (43.88) by 1.19 PPL! Spokes scale!
+47085d6	46.57	keep	v3_proj: 20 layers + embed_proj, no spokes, 11.70M — projection alone worth -1.33 vs v3_none
+-	45.98	keep	v3_proj_r32: 20 layers + embed_proj + 4 spokes r=32, 12.36M — proj + spokes compound! -1.92 vs v3_none (94% additive)
+-	42.86	keep	v3_100m_proj: 100M + embed_proj, no spokes, 109.9M — projection worth -1.02 at 100M (vs -1.33 at 11M)
+-	42.58	keep	v3_100m_proj_r32: 100M + embed_proj + 4 spokes r=32, 112.5M — only -1.30 total (59% additive, worse than 11M's 94%)
+-	43.22	discard	v3_100m_r64: 100M + 4 spokes r=64, 114.9M — WORSE than r32 (42.69)! Higher rank hurts at 100M
+-	41.66	discard	v3_100m_r32 at LR 3e-3: 41.66 PPL, BPB=1.1583 — LOSES to baseline at same LR (41.30)
+-	41.30	keep	v3_100m_none at LR 3e-3: BASELINE WINS! 41.30 PPL, BPB=1.1564 — spoke advantage was LR artifact (again)
+-	111.10	discard	v3_100m_none + MuonAdamW at default LRs: 111.10 PPL, BPB=1.4634 — Muon LRs need tuning, can't use AdamW defaults
+-	40.98	keep	v3_100m_r32 at LR 3e-3: 40.98 PPL, BPB=1.1539 — BEATS baseline (41.48) at matched LR! Spoke advantage is real (-0.50 PPL)
+-	43.55	discard	v3_100m_r32 at LR 4e-3: overshoot, LR 3e-3 is optimal for spokes at 100M
+-	40.71	keep	v3_100m_r32 spoke-LR 3x: NEW BEST 100M! -0.77 vs baseline, spoke-specific LR helps, BPB=1.1516
+-	41.71	discard	v3_100m_r32_swiglu spoke-LR 3x: SwiGLU hurts (+1.0 vs standard spokes). Extra gating adds noise, not expressiveness.
+-	41.86	discard	v3_100m_r32 spoke-LR 5x: overshoot (+1.15 vs 3x). 3x is optimal spoke LR multiplier.
+-	47.54	discard	v3_r32 spoke-LR 3x (11M): WORSE than uniform (+0.36). 3x only helps at 100M where backbone LR is lower.
+-	47.77	discard	v3_r32 spoke-LR 0.45x (11M, abs 9e-3): even worse. At 11M, uniform LR is optimal for spokes.
+-	40.62	keep	v3_100m_r32 spoke-LR 2x: NEW BEST 100M! -0.86 vs baseline (41.48), BPB=1.1509. 2x beats 3x.
+-	41.27	discard	v3_100m_r32_every2 spoke-LR 2x: selective spokes (10 of 20 layers) = -0.21 vs baseline, loses 75% of benefit vs every-layer
+-	39.76	keep	v3_100m_proj_r32 spoke-LR 2x: NEW BEST 100M! -1.72 vs baseline (41.48), BPB=1.1447. Proj + spokes + tuned spoke LR compound strongly.
+-	46.12	discard	v3_proj_r32 spoke-LR 2x (11M): slightly worse than uniform (45.98). Spoke-LR only helps at 100M.
+-	40.15	keep	v3_100m_proj at LR 3e-3: baseline+proj = 40.15. Proj alone gives -1.33. Fair spoke advantage = 39.76-40.15 = -0.39.
+-	39.15	keep	v3_100m_proj_r64 spoke-LR 2x: NEW BEST! -2.33 vs baseline (41.48), -1.00 vs proj-only (40.15). r64 works with spoke-LR!

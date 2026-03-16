@@ -23,13 +23,18 @@ class SpokeLayer(nn.Module):
         W_down_s: [d, r] — project to low-rank view
         W_up_s:   [r, d] — project back to hub dimension
 
-    Forward:
-        h_norm = RMSNorm(h)
-        view_s = SiLU(h_norm @ W_down_s)       for each spoke s
-        update_s = view_s @ W_up_s              for each spoke s
-        h = h + gate * mean(updates)
+    Standard mode:
+        view_s = SiLU(h_norm @ W_down_s)
+        update_s = view_s @ W_up_s
 
-    Params per layer: d + S*(d*r + r*d) + 1
+    SwiGLU mode (swiglu=True):
+        gate_s = SiLU(h_norm @ W_gate_s)
+        view_s = gate_s * (h_norm @ W_down_s)
+        update_s = view_s @ W_up_s
+        (adds one extra d*r projection per spoke)
+
+    Params per layer: d + S*(d*r + r*d) + 1  [standard]
+                      d + S*(2*d*r + r*d) + 1  [swiglu]
     """
 
     def __init__(
@@ -38,11 +43,13 @@ class SpokeLayer(nn.Module):
         num_spokes: int,
         rank: int,
         gate_init: float = 0.0,
+        swiglu: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
         self.num_spokes = num_spokes
         self.rank = rank
+        self.swiglu = swiglu
 
         self.norm = RMSNorm(d_model)
 
@@ -51,6 +58,12 @@ class SpokeLayer(nn.Module):
             [nn.Linear(d_model, rank, bias=False) for _ in range(num_spokes)]
         )
         self.w_up = nn.ModuleList([nn.Linear(rank, d_model, bias=False) for _ in range(num_spokes)])
+
+        # SwiGLU: extra gate projection per spoke
+        if swiglu:
+            self.w_gate = nn.ModuleList(
+                [nn.Linear(d_model, rank, bias=False) for _ in range(num_spokes)]
+            )
 
         # Initialize up projections to zero so spokes start as identity
         for up in self.w_up:
@@ -75,7 +88,11 @@ class SpokeLayer(nn.Module):
         views = []
         updates = []
         for s in range(self.num_spokes):
-            view = F.silu(self.w_down[s](h_norm))  # [B, T, r]
+            if self.swiglu:
+                gate_s = F.silu(self.w_gate[s](h_norm))  # [B, T, r]
+                view = gate_s * self.w_down[s](h_norm)  # [B, T, r]
+            else:
+                view = F.silu(self.w_down[s](h_norm))  # [B, T, r]
             update = self.w_up[s](view)  # [B, T, d]
             views.append(view)
             updates.append(update)

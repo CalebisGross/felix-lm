@@ -56,6 +56,10 @@ class FelixLMv3(nn.Module):
 
         # 3. Spoke layers (the agents)
         if config.gate_schedule != "none":
+            # Which layers get spokes (every N layers)
+            self.spoke_layer_indices = [
+                i for i in range(config.num_layers) if i % config.spoke_every_n == 0
+            ]
             self.spokes = nn.ModuleList(
                 [
                     SpokeLayer(
@@ -63,12 +67,19 @@ class FelixLMv3(nn.Module):
                         num_spokes=config.num_spokes,
                         rank=config.spoke_rank,
                         gate_init=self._gate_init_for_layer(i, config),
+                        swiglu=config.spoke_swiglu,
                     )
-                    for i in range(config.num_layers)
+                    for i in self.spoke_layer_indices
                 ]
             )
+            # Map layer index -> spoke index for fast lookup
+            self._spoke_map = {
+                layer_i: spoke_i for spoke_i, layer_i in enumerate(self.spoke_layer_indices)
+            }
         else:
             self.spokes = None
+            self.spoke_layer_indices = []
+            self._spoke_map = {}
 
         # 4. Per-layer residual lambdas: h = lambda_resid * h + lambda_x0 * x0
         if config.use_residual_lambdas:
@@ -162,7 +173,8 @@ class FelixLMv3(nn.Module):
                 device=token_ids.device,
             )
 
-            spoke = self.spokes[i] if self.spokes is not None else None
+            spoke_idx = self._spoke_map.get(i)
+            spoke = self.spokes[spoke_idx] if spoke_idx is not None else None
 
             if use_ckpt and spoke is not None:
                 h, agreement = self._checkpointed_forward(layer, spoke, h, cos, sin)
