@@ -304,7 +304,7 @@ class DolmaDataset(IterableDataset):
             "allenai/dolma3_dolmino_mix-100B-1125",
             split="train",
             streaming=True,
-        )
+        ).select_columns(["text"])
 
         buffer = []
         tokens_seen = 0
