@@ -33,20 +33,22 @@ echo ""
 # NOTE: Batch sizes below are conservative estimates for MI300X 192GB with
 # math SDPA (which materializes T*T attention). Adjust based on debug_nan.py output.
 
-# Batch sizes from debug_nan.py on MI300X 192GB:
-#   v3_baseline_100m: max=16, use 14 (safe headroom)
-#   v3_100m_proj_r64: max=20, use 16
-#   v3_baseline_500m: max=64, use 48 (grad_ckpt ON)
-#   v3_500m_proj_r64: max=64, use 48 (grad_ckpt ON)
+# LESSON LEARNED: grad_accum too high = too few optimizer steps = divergence.
+# 1B tokens / (batch * seq * grad_accum) = total_steps / grad_accum = optimizer_steps
+# Need at least ~2000 optimizer steps for convergence.
+#
+# Batch sizes from debug_nan.py:
+#   100M: max=16-20, use 14 with grad_accum=4 (eff=56, ~2179 opt steps)
+#   500M: max=64, use 48 with grad_accum=1 (eff=48, ~10172 opt steps)
 
 echo "=== [1/4] v3_baseline_100m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_100m \
     --device cuda \
-    --batch-size 14 --grad-accum 17 \
+    --batch-size 14 --grad-accum 4 \
     --lr 3e-3 --beta2 0.99 \
     --compile --dtype bf16 \
-    --eval-interval 1000 \
+    --eval-interval 500 \
     --tokens-per-epoch 1000000000
 
 echo ""
@@ -54,11 +56,11 @@ echo "=== [2/4] v3_100m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_100m_proj_r64 \
     --device cuda \
-    --batch-size 16 --grad-accum 15 \
+    --batch-size 14 --grad-accum 4 \
     --lr 3e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile --dtype bf16 \
-    --eval-interval 1000 \
+    --eval-interval 500 \
     --tokens-per-epoch 1000000000
 
 # --- 500M experiments (1B tokens each, grad checkpointing ON) ---
@@ -68,7 +70,7 @@ echo "=== [3/4] v3_baseline_500m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_500m \
     --device cuda \
-    --batch-size 48 --grad-accum 5 \
+    --batch-size 48 --grad-accum 1 \
     --lr 1e-3 --beta2 0.99 \
     --compile --dtype bf16 \
     --eval-interval 500 \
@@ -79,7 +81,7 @@ echo "=== [4/4] v3_500m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_500m_proj_r64 \
     --device cuda \
-    --batch-size 48 --grad-accum 5 \
+    --batch-size 48 --grad-accum 1 \
     --lr 1e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile --dtype bf16 \

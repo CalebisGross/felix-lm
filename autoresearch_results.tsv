@@ -115,6 +115,7 @@ aef51d4	73.00	discard	exp75: v2_100m_felix_add (1+20 d128, 110M) — additive ne
 -	40.62	keep	v3_100m_r32 spoke-LR 2x: NEW BEST 100M! -0.86 vs baseline (41.48), BPB=1.1509. 2x beats 3x.
 -	41.27	discard	v3_100m_r32_every2 spoke-LR 2x: selective spokes (10 of 20 layers) = -0.21 vs baseline, loses 75% of benefit vs every-layer
 -	39.76	keep	v3_100m_proj_r32 spoke-LR 2x: NEW BEST 100M! -1.72 vs baseline (41.48), BPB=1.1447. Proj + spokes + tuned spoke LR compound strongly.
+-	39.73	discard	v3_100m_proj_r128 spoke-LR 2x: worse than r64 (39.15). r64 is optimal rank at 100M.
 -	46.12	discard	v3_proj_r32 spoke-LR 2x (11M): slightly worse than uniform (45.98). Spoke-LR only helps at 100M.
 -	40.15	keep	v3_100m_proj at LR 3e-3: baseline+proj = 40.15. Proj alone gives -1.33. Fair spoke advantage = 39.76-40.15 = -0.39.
 -	39.15	keep	v3_100m_proj_r64 spoke-LR 2x: NEW BEST! -2.33 vs baseline (41.48), -1.00 vs proj-only (40.15). r64 works with spoke-LR!
