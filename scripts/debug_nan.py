@@ -116,7 +116,9 @@ def main():
 
     print(f"Testing {len(configs)} configs, {args.steps} steps each")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.0f} GB")
+    props = torch.cuda.get_device_properties(0)
+    vram = getattr(props, "total_memory", getattr(props, "total_mem", 0))
+    print(f"VRAM: {vram / 1e9:.0f} GB")
     print()
 
     results = {}
