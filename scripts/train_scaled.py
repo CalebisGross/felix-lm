@@ -296,18 +296,17 @@ class DolmaDataset(IterableDataset):
         self.split = split
 
     def __iter__(self):
-        from datasets import Features, Value, load_dataset
+        from datasets import load_dataset
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        # Only load 'text' column — Dolma shards have inconsistent schemas
-        # (some include warcinfo, sa_remove_ranges, etc). Specifying features
-        # explicitly avoids CastError on heterogeneous shards.
+        # Dolma shards have inconsistent schemas (some include extra columns
+        # like warcinfo, sa_remove_ranges, metadata:struct). We load raw
+        # jsonl to avoid schema casting entirely, then extract text manually.
         ds = load_dataset(
             "allenai/dolma3_dolmino_mix-100B-1125",
             split="train",
             streaming=True,
-            features=Features({"text": Value("string")}),
         )
 
         buffer = []
@@ -315,8 +314,11 @@ class DolmaDataset(IterableDataset):
         chunk_size = self.seq_len + 1
 
         for example in ds:
-            text = example.get("text", "")
-            if not text.strip():
+            try:
+                text = example.get("text", "")
+            except Exception:
+                continue
+            if not text or not text.strip():
                 continue
             ids = tokenizer.encode(text)
             buffer.extend(ids)
@@ -454,7 +456,9 @@ def train(config, args):
     train_ds = DolmaDataset(seq_len=args.seq_len, max_tokens=tokens_per_epoch * args.epochs)
     val_ds = WikiTextValDataset(seq_len=args.seq_len)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, num_workers=2, pin_memory=True)
+    # num_workers=0 for streaming datasets — worker subprocesses crash on
+    # Dolma shards with inconsistent schemas (CastError in Arrow table cast)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, num_workers=0, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=0)
 
     # Optimizer (with spoke-specific LR for v3)
