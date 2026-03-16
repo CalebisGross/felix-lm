@@ -21,11 +21,15 @@ echo ""
 
 # --- 100M experiments (1B tokens each) ---
 
+# NOTE: Batch sizes below are conservative estimates for MI300X 192GB with
+# math SDPA (which materializes T*T attention). Run debug_nan.py first to
+# find actual max batch, then adjust these. More batch = less grad_accum = faster.
+
 echo "=== [1/4] v3_baseline_100m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_100m \
     --device cuda \
-    --batch-size 16 --grad-accum 16 \
+    --batch-size 20 --grad-accum 12 \
     --lr 3e-3 --beta2 0.99 \
     --compile \
     --eval-interval 1000 \
@@ -36,7 +40,7 @@ echo "=== [2/4] v3_100m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_100m_proj_r64 \
     --device cuda \
-    --batch-size 16 --grad-accum 16 \
+    --batch-size 20 --grad-accum 12 \
     --lr 3e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile \
@@ -50,7 +54,7 @@ echo "=== [3/4] v3_baseline_500m (control, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_baseline_500m \
     --device cuda \
-    --batch-size 8 --grad-accum 32 \
+    --batch-size 12 --grad-accum 20 \
     --lr 1e-3 --beta2 0.99 \
     --compile \
     --eval-interval 500 \
@@ -61,7 +65,7 @@ echo "=== [4/4] v3_500m_proj_r64 (spokes, 1B tokens) ==="
 python scripts/train_scaled.py \
     --config v3_500m_proj_r64 \
     --device cuda \
-    --batch-size 8 --grad-accum 32 \
+    --batch-size 12 --grad-accum 20 \
     --lr 1e-3 --beta2 0.99 \
     --spoke-lr-mult 2.0 \
     --compile \
