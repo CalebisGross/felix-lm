@@ -41,16 +41,14 @@ def find_max_batch(config_name, max_try=64, steps=5):
                 x = torch.randint(0, 50257, (mid, 2048)).cuda()
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     result = model(x, x)
+                loss_val = result["loss"].item()
+                # Check for NaN on first step
+                if step == 0 and loss_val != loss_val:
+                    raise ValueError("NaN loss on step 0!")
                 result["loss"].backward()
                 optimizer.step()
                 optimizer.zero_grad()
                 del x, result
-
-                if step == 0:
-                    loss_val = result["loss"].item() if "loss" in result else 0
-                    # Check for NaN on first step
-                    if loss_val != loss_val:  # NaN check
-                        raise ValueError("NaN loss on step 0!")
 
             del model, optimizer
             torch.cuda.empty_cache()
