@@ -154,3 +154,30 @@ The Felix identity (diversity, agreement, convergence) provides:
 The right evaluation for Felix is not just PPL — it's calibration, stratified
 difficulty analysis, and downstream task performance where hard tokens and
 uncertainty estimation matter.
+
+## Real-Scale Validation (1B Tokens Dolma, MI300X)
+
+The qualitative properties were confirmed at real scale (100M params, 1B tokens
+of Dolma, seq_len=2048). All properties held or strengthened:
+
+| Property | Local (2500 steps WikiText) | Real Scale (1B tokens Dolma) |
+|----------|---------------------------|------------------------------|
+| Calibration (ECE ratio) | 1.2-2.0x better | **1.9x better** (0.029 vs 0.056) |
+| Hardest quintile improvement | -2.8% to -4.2% | **-7.4%** |
+| Rare token improvement | -0.45 nats | **-0.52 nats** |
+| Representation divergence | cosine ~0.00 | cosine 0.03 -> -0.01 (diverges with depth) |
+| Learned convergence | binary (11M), smooth (100M) | **explore-diverse-reconverge** pattern |
+
+The spoke agreement pattern at real scale is the clearest yet:
+- Layers 0-1: high agreement (0.25-0.27) — spokes start correlated
+- Layers 2-16: low agreement (0.02-0.11) — maximum diversity (exploration)
+- Layers 17-19: rising agreement (0.20-0.25) — reconvergence
+
+This is the Felix multi-agent principle realized: diverse exploration followed
+by convergence, discovered by the model from uniform initialization.
+
+## 500M Result
+
+At 500M with 250M tokens, spokes lost on PPL by 4.7%. Qualitative analysis was
+not run on 500M checkpoints (droplet auto-shutdown before retrieval). The 500M
+result is inconclusive due to undertrained models and untuned LR.

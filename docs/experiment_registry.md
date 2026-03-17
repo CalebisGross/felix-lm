@@ -404,6 +404,54 @@ Results are filled in after completion.
 - **Verdict:** REFUTED — spoke-specific LR doesn't help at 11M regardless of multiplier.
 - **Analysis:** Consistent with EXP-30/32: at 11M, backbone LR 2e-2 is already optimal for spokes. Spoke-LR separation is a 100M-scale technique only.
 
+### MI300X-SCALING-1: v3_baseline_100m (1B tokens Dolma)
+- **Date:** 2026-03-16
+- **Status:** COMPLETED (after fixing grad_accum)
+- **Hypothesis:** 100M baseline converges on 1B tokens of Dolma
+- **Variable:** Real-scale training (1B tokens Dolma vs 2500 steps WikiText)
+- **Control:** N/A (first real-scale v3 run)
+- **Prediction:** PPL should reach 20-30 range
+- **Params:** 109.9M | **Config:** v3_baseline_100m
+- **Result:** best val_ppl=542.97, BPB=1.957 (after fixing grad_accum from 17 to 4)
+- **Verdict:** COMPLETED — high absolute PPL due to domain mismatch (Dolma train, WikiText eval) and seq_len=2048
+- **Analysis:** First attempt diverged (grad_accum=17 = only 120 opt steps). Fixed with grad_accum=4 (2179 opt steps). Lesson: always verify optimizer step count.
+
+### MI300X-SCALING-2: v3_100m_proj_r64 (1B tokens Dolma)
+- **Date:** 2026-03-16
+- **Status:** COMPLETED
+- **Hypothesis:** Spokes beat baseline at 100M with real-scale training
+- **Variable:** proj + r64 spokes + spoke-LR 2x
+- **Control:** v3_baseline_100m = 542.97 PPL
+- **Prediction:** Based on local experiments (-5.6%), expect ~510-520
+- **Params:** 115.2M | **Config:** v3_100m_proj_r64
+- **Result:** best val_ppl=503.30, BPB=1.946 — SPOKES WIN by 7.3%
+- **Verdict:** CONFIRMED — spoke advantage holds and GROWS at real scale
+- **Analysis:** Advantage increased from 5.6% (local) to 7.3% (1B tokens). Deep analysis confirmed: 1.9x better calibration (ECE 0.029 vs 0.056), -7.4% on hardest tokens, learned convergence, divergent representations.
+
+### MI300X-SCALING-3: v3_baseline_500m (250M tokens Dolma)
+- **Date:** 2026-03-17
+- **Status:** COMPLETED
+- **Hypothesis:** Establish 500M baseline
+- **Variable:** Scale to 500M params (directional, 250M tokens due to budget)
+- **Control:** N/A
+- **Prediction:** Lower PPL than 100M due to more capacity
+- **Params:** 455.2M | **Config:** v3_baseline_500m
+- **Result:** best val_ppl=795.55, BPB=2.073
+- **Verdict:** COMPLETED — severely undertrained (0.55 tokens/param vs 100M's 9.1 tokens/param)
+- **Analysis:** 795 PPL worse than 100M's 543 because 250M tokens is not enough for a 500M model.
+
+### MI300X-SCALING-4: v3_500m_proj_r64 (250M tokens Dolma)
+- **Date:** 2026-03-17
+- **Status:** COMPLETED
+- **Hypothesis:** Spokes beat baseline at 500M
+- **Variable:** proj + r64 spokes + spoke-LR 2x at 500M
+- **Control:** v3_baseline_500m = 795.55 PPL
+- **Prediction:** If 100M advantage holds: ~740 PPL
+- **Params:** 467.8M | **Config:** v3_500m_proj_r64
+- **Result:** best val_ppl=832.56, BPB=2.094 — spokes LOSE by 4.7%
+- **Verdict:** INCONCLUSIVE — spokes hurt at 500M with these settings, but LR was untuned and training was severely undertrained. Cannot distinguish HP issue from genuine scaling failure.
+- **Analysis:** Spokes trailed at every checkpoint. Three confounds: (1) LR 3e-4 guessed, not tuned (spoke-LR 2x calibrated for 100M only). (2) 250M tokens = 0.55 tokens/param, backbone too undertrained for spokes to add value. (3) Possible genuine scaling limit. Would need 1B+ tokens and LR sweep to resolve.
+
 ### EXP-36: v3_100m_proj_none_lr3e3 (skepticism: does proj help baseline too?)
 - **Date:** 2026-03-16
 - **Status:** RUNNING

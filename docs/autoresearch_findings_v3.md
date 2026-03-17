@@ -1,6 +1,6 @@
 # Felix-LM v3 Autoresearch: Hub-and-Spoke Findings
 
-**38 experiments, 11M and 100M scale, March 2026**
+**42+ experiments locally, 4 MI300X scaling runs, 11M to 500M, March 2026**
 
 ## The Question
 
@@ -8,9 +8,11 @@ Can lightweight "spoke" probes — low-rank read/write operations branching off 
 
 ## The Answer (Short Version)
 
-Yes. At both 11M and 100M parameters, a transformer with 4 spoke probes at rank 32 beats the same transformer without spokes. The improvement grows with scale: -0.72 PPL at 11M (1.5%), -1.19 PPL at 100M (2.7%).
+Yes at 100M. Inconclusive at 500M.
 
-This is the first Felix architecture variant that definitively improves over a plain transformer at matched hyperparameters and training steps.
+At 100M with 1B tokens (Dolma), proj + r64 spokes with spoke-LR 2x beats the baseline by **7.3%** (503 vs 543 PPL). The spoke model is also 1.9x better calibrated, specializes in hard/rare tokens, and learns progressive convergence schedules from scratch.
+
+At 500M with 250M tokens, spokes lost by 4.7% — but the run was severely undertrained (0.55 tokens/param) with untuned LR. The 500M result is inconclusive, not definitively negative.
 
 ## What We Built
 
@@ -237,9 +239,40 @@ previously hidden (r64 failed at uniform LR, succeeds at 2x).
 |---------|----------|-----------------|------------------|---------|
 | v1 (MSPM) | Hard merge stages | 118.41 PPL (loses) | N/A at matched LR | Loses |
 | v2 (Adaptive) | Soft merge + CentralPost | +2 to +6 PPL tax | LR artifact | Loses |
-| **v3 (Hub-and-Spoke)** | Cheap spoke probes | **-0.72 PPL (wins)** | **-0.50 PPL (wins)** | **Wins at both scales + qualitative gains** |
+| **v3 (Hub-and-Spoke)** | Cheap spoke probes | **-0.72 PPL (wins)** | **-7.3% at 100M (wins), +4.7% at 500M (loses)** | **Wins at 100M, inconclusive at 500M** |
 
-v3 is the first Felix variant that beats a plain transformer at both 11M and 100M under fair conditions (matched LR). The PPL advantage is modest (-0.50 at 100M), but the qualitative analysis reveals deeper differences: better calibration, hard-token specialization, and learned convergence schedules. See `docs/qualitative_findings.md` for the full analysis.
+v3 is the first Felix variant that beats a plain transformer under fair conditions at real scale. At 100M with 1B tokens of Dolma, spokes improve PPL by 7.3% with 1.9x better calibration. At 500M with 250M tokens, spokes lost — but the run was severely undertrained with untuned LR. See `docs/qualitative_findings.md` for the beyond-PPL analysis.
+
+## MI300X Scaling Results
+
+### 100M (1B tokens Dolma, LR 3e-3, fair comparison)
+
+| Config | Params | Best Val PPL | BPB | Delta |
+|--------|--------|-------------|-----|-------|
+| Baseline (proj, no spokes) | 109.9M | 542.97 | 1.957 | — |
+| **Proj + r64 + spoke-LR 2x** | **115.2M** | **503.30** | **1.946** | **-7.3%** |
+
+Deep analysis of these checkpoints confirmed all qualitative properties:
+- Calibration: ECE 0.029 vs 0.056 (1.9x better)
+- Hardest token quintile: -7.4% better
+- Rare tokens: -0.52 nats better
+- Learned gate schedule: explore (layers 0-5), converge (layers 15-17), pullback (18-19)
+- Spoke agreement: high early (0.27), diverse middle (0.02), reconverging late (0.25)
+- Representations: cosine similarity diverges from 0.03 to -0.01 through depth
+
+### 500M (250M tokens Dolma, LR 3e-4, INCONCLUSIVE)
+
+| Config | Params | Best Val PPL | BPB | Delta |
+|--------|--------|-------------|-----|-------|
+| Baseline (proj, no spokes) | 455.2M | 795.55 | 2.073 | — |
+| Proj + r64 + spoke-LR 2x | 467.8M | 832.56 | 2.094 | +4.7% |
+
+Spokes lost at 500M, but three major confounds:
+1. **Undertrained**: 0.55 tokens/param (vs 100M's 9.1 tokens/param). Model barely converged.
+2. **Untuned LR**: 3e-4 was guessed. Spoke-LR 2x was calibrated for 100M only.
+3. **Budget-constrained**: Only 250M tokens due to credits. A fair test needs 1B+.
+
+The 500M result cannot distinguish "spokes don't scale" from "wrong hyperparameters on an undertrained model."
 
 ## What's Next
 
